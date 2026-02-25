@@ -493,7 +493,6 @@ class USEFUL:
                                     polMode=polMode)
         return canvas, geometries
     
-    
     def get_sample_data_path(self,
                              sample_data_token: str) -> str:
         '''
@@ -622,7 +621,7 @@ class USEFUL:
                                         ins=ins,
                                         save_path=save_path)
     
-    def generate_scene_video(self,
+    def render_scene(self,
                              scene_token: str,
                              save_path: str,
                              width: int = 960,
@@ -635,7 +634,7 @@ class USEFUL:
                              with_lidar: bool = False,
                              canvas_shape: tuple = (2,3),
                              canvas_order=['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR']):
-        return self.explorer.generate_scene_video(scene_token=scene_token,
+        return self.explorer.render_scene(scene_token=scene_token,
                                                   save_path=save_path,
                                                   width=width,
                                                   height=height,
@@ -1091,7 +1090,7 @@ class UsefulExplorer:
             category_dict[categories[i]['name']] = i
         return category_dict
     
-    def generate_scene_video(self,
+    def render_scene(self,
                              scene_token: str,
                              save_path: str,
                              width: int = 960,
