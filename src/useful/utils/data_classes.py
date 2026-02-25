@@ -1233,6 +1233,7 @@ class Image:
                point_size: int = 1,
                radar: 'RadarPointCloud' = None,
                colormap: str = 'jet',
+               loop: float = 5, 
                camera_intrinsics: np.ndarray = None,
                extrinsic: np.ndarray = None,
                distortion_vector: np.ndarray = None,
@@ -1271,7 +1272,7 @@ class Image:
             AssertionError: If boxes are provided without camera calibration parameters.
         """
         
-        assert len(boxes) != 0 and camera_intrinsics == None, 'Fusion parameters are needed to draw 3d boxes'
+        #assert len(boxes) != 0 and camera_intrinsics == None, 'Fusion parameters are needed to draw 3d boxes'
         copy = self.image.copy()
 
         if lidar is not None:
@@ -1280,10 +1281,16 @@ class Image:
                                                    distortion_vector=distortion_vector)
             if colormap == 'beamagine':
                 colors = lidar.beamagine_color_palette()
+                if np.max(copy) < 2:
+                    colors = colors / 255
             elif colormap == 'intensity':
                 colors = lidar.get_color_for_intensity(max = 2000)
+                if np.max(copy) < 2:
+                    colors = colors / 255
             else:
-                colors = lidar.get_color_for_distance(color_palette=colormap)
+                colors = lidar.get_color_for_distance(color_palette=colormap, loop=loop)
+                if np.max(copy) < 2:
+                    colors = colors / 255
             for i in range(len(pixels[:,0])):
                 if pixels[i,2] > 0:
                     copy = cv2.circle(copy, (int(pixels[i, 0]), int(pixels[i, 1])), radius = point_size, color=(colors[i,2], colors[i,1], colors[i,0]), thickness=-1)
@@ -1303,6 +1310,8 @@ class Image:
                     pixels = box.project_corners_to_image(camera_intrinsics=camera_intrinsics,
                                                         extrinsic=extrinsic,
                                                         distortion_vector=distortion_vector)
+                    if np.any(pixels[:,2] < 0):
+                        continue
                 if bbox_2d:
                     if isinstance(box, Box):
                         copy = self.draw_projected_boxes2d(copy, pixels, color=box.color, thickness=2, plot_corners=plot_corners)
@@ -1357,23 +1366,11 @@ class RGBImage(Image):
             self.data_path = None
             self.image = np.copy(img)
         self.modality = 'RGB'
-
-class SWIRImage(Image):
-    def __init__(self,
-                 data_path: pathlib.Path = None,
-                 img: np.ndarray = None) -> None:
-        if data_path is not None:
-            self.data_path = pathlib.Path(data_path)
-            self.image = cv2.imread(str(self.data_path), cv2.IMREAD_GRAYSCALE)
-        elif img is not None:
-            self.data_path = None
-            self.image = np.copy(img)
-        self.modality = 'SWIR'
-
 class ThermalImage(Image):
     def __init__(self,
                  data_path: pathlib.Path = None,
-                 img: np.ndarray = None) -> None:
+                 img: np.ndarray = None,
+                 colormap: str = 'magma') -> None:
         if data_path is not None:
             self.data_path = pathlib.Path(data_path)
             self.image = cv2.imread(str(self.data_path), cv2.IMREAD_GRAYSCALE)
@@ -1381,6 +1378,50 @@ class ThermalImage(Image):
             self.data_path = None
             self.image = np.copy(img)
         self.modality = 'Thermal'
+        self.colormap(colormap)
+
+    def colormap(self, cmap: str = 'magma'):
+        """
+        Aplica un colormap de Matplotlib a la imatge actual.
+        Nota: self.image ha de ser una matriu 2D (grayscale).
+        """
+        if self.image is None:
+            print("Error: No hi ha cap imatge carregada.")
+            return
+
+        try:
+            get_cmap = plt.get_cmap(cmap)
+        except ValueError:
+            print(f"Error: colormap '{cmap}' does not exist in Matplotlib.")
+            return
+
+        img_min = self.image.min()
+        img_max = self.image.max()
+        
+        if img_max <= img_min:
+            norm_img = np.zeros_like(self.image, dtype=np.float32)
+        else:
+            norm_img = (self.image - img_min) / (img_max - img_min)
+
+        color_mapped = get_cmap(norm_img)
+
+        rgb_img = (color_mapped[:, :, :3] * 255).astype(np.uint8)
+        self.image = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
+        
+
+class SWIRImage(ThermalImage):
+    def __init__(self,
+                 data_path: pathlib.Path = None,
+                 img: np.ndarray = None,
+                 colormap: str = 'gray') -> None:
+        if data_path is not None:
+            self.data_path = pathlib.Path(data_path)
+            self.image = cv2.imread(str(self.data_path), cv2.IMREAD_GRAYSCALE)
+        elif img is not None:
+            self.data_path = None
+            self.image = np.copy(img)
+        self.modality = 'SWIR'
+        self.colormap(colormap)
 
 class PolarimetricImage(Image):
     def __init__(self,
@@ -1815,6 +1856,7 @@ class Box:
         if distortion_vector is not None:
             assert len(distortion_vector) == 5, f'The number of components in distortion_vector ({len(distortion_vector)}) is not what is expected (5)'
             pixels = PointCloud.distortImagePoint(pixels, camera_intrinsics, distortion_vector)
+            pixels = np.hstack([pixels, projected_points[:,2:3]])
         return pixels
     
     

@@ -765,7 +765,8 @@ class UsefulExplorer:
                 pointcloud.render(vis=vis, other_geometries=boxes_list, intensity=intensity, loop=loop)
             geometries = []
             geometries.append(pointcloud.point_cloud)
-            geometries.extend(boxes_list)
+            if with_anns:
+                geometries.extend(boxes_list)
             return geometries
 
         elif sensor_modality in ['swir', 'rgb', 'thermal', 'polarimetric']:
