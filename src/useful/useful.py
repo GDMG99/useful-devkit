@@ -13,7 +13,7 @@ from pyquaternion import Quaternion
 import tqdm
 
 from datetime import datetime
-from utils.data_classes import Box, Box2D, LidarPointCloud, SWIRImage, RadarPointCloud, RGBImage, ThermalImage, PolarimetricImage
+from .utils.data_classes import Box, Box2D, LidarPointCloud, SWIRImage, RadarPointCloud, RGBImage, ThermalImage, PolarimetricImage
 
 PYTHON_VERSION = sys.version_info[0]
 
