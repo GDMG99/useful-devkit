@@ -372,6 +372,19 @@ class USEFUL:
                         annotation_dict[sample_record['token']][ann_2d_record['instance_token']] = {}
                     annotation_dict[sample_record['token']][ann_2d_record['instance_token']][channel] = ann_2d_record['token']
         return annotation_dict
+    
+    def get_scene_tokens_for_split(self,
+                                   split: list = ['train', 'test', 'val']) -> list:
+        return [sc['token'] for sc in self.scene if sc['split'] in split]
+    
+    def get_sample_tokens_for_split(self,
+                                   split: list = ['train', 'test', 'val']) -> list:
+        scene_tokens = self.get_scene_tokens_for_split(split)
+        sample_list = []
+        for token in scene_tokens:
+            sample_tokens_in_scene = self.get_sample_tokens_in_scene(token)
+            sample_list.extend(sample_tokens_in_scene)
+        return sample_list
         
         
     def get_scene_files(self,
@@ -492,7 +505,47 @@ class USEFUL:
                                     lidar_format = lidar_format,
                                     polMode=polMode)
         return canvas, geometries
-    
+
+    def render_sample_bev(self,
+                          sample_token: str,
+                          width: int = 1800,
+                          height: int = 800,
+                          with_anns: bool = True,
+                          bev_max_range: float = 150.0,
+                          bev_resolution: float = 0.1,
+                          intensity: bool = False,
+                          show: bool = True) -> np.ndarray:
+        '''
+        Renders the BEV + 6-camera composite for a single sample.
+        Calls explorer method.
+        '''
+        return self.explorer.render_sample_bev(sample_token=sample_token,
+                                               width=width,
+                                               height=height,
+                                               with_anns=with_anns,
+                                               bev_max_range=bev_max_range,
+                                               bev_resolution=bev_resolution,
+                                               intensity=intensity,
+                                               show=show)
+
+    def render_lidar_bev(self,
+                         sample_token: str,
+                         bev_max_range: float = 150.0,
+                         bev_resolution: float = 0.1,
+                         with_anns: bool = True,
+                         intensity: bool = False,
+                         show: bool = True) -> np.ndarray:
+        '''
+        Renders the BEV of the LiDAR point cloud for a single sample.
+        Calls explorer method.
+        '''
+        return self.explorer.render_lidar_bev(sample_token=sample_token,
+                                              bev_max_range=bev_max_range,
+                                              bev_resolution=bev_resolution,
+                                              with_anns=with_anns,
+                                              intensity=intensity,
+                                              show=show)
+
     def get_sample_data_path(self,
                              sample_data_token: str) -> str:
         '''
@@ -622,30 +675,24 @@ class USEFUL:
                                         save_path=save_path)
     
     def render_scene(self,
-                             scene_token: str,
-                             save_path: str,
-                             width: int = 960,
-                             height: int = 480,
-                             fps: int = 7,
-                             with_instance: bool = False,
-                             with_anns: bool = True,
-                             filter_category: list = [],
-                             list_instances: list = [],
-                             with_lidar: bool = False,
-                             canvas_shape: tuple = (2,3),
-                             canvas_order=['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR']):
+                     scene_token: str,
+                     save_path: str,
+                     fps: int = 7,
+                     width: int = 1800,
+                     height: int = 800,
+                     with_anns: bool = True,
+                     bev_max_range: float = 150.0,
+                     bev_resolution: float = 0.1,
+                     intensity: bool = False):
         return self.explorer.render_scene(scene_token=scene_token,
-                                                  save_path=save_path,
-                                                  width=width,
-                                                  height=height,
-                                                  fps=fps,
-                                                  with_instance=with_instance,
-                                                  with_anns=with_anns,
-                                                  filter_category=filter_category,
-                                                  list_instances=list_instances,
-                                                  with_lidar=with_lidar,
-                                                  canvas_shape=canvas_shape,
-                                                  canvas_order=canvas_order)
+                                          save_path=save_path,
+                                          fps=fps,
+                                          width=width,
+                                          height=height,
+                                          with_anns=with_anns,
+                                          bev_max_range=bev_max_range,
+                                          bev_resolution=bev_resolution,
+                                          intensity=intensity)
 class UsefulExplorer:
     """
     Helper class to list and visualize Useful data. These are meant to serve as tutorials and templates for working with the data.
@@ -939,7 +986,7 @@ class UsefulExplorer:
                     if intensity:
                         colors = record_lidar[0].get_color_for_intensity(max=2000)
                     else:
-                        colors = record_lidar[0].get_color_for_distance(color_palette='jet')
+                        colors = record_lidar[0].get_color_for_distance(color_palette='jet', loop = loop)
                     for j in range(len(pixels)):
                         resized = cv2.circle(resized,
                                              (int(pixels_resized[j, 0]), int(pixels_resized[j, 1])), radius = 0, color=(colors[j,2], colors[j,1], colors[j,0]), thickness=-1)
@@ -1090,38 +1137,298 @@ class UsefulExplorer:
             category_dict[categories[i]['name']] = i
         return category_dict
     
+    def render_sample_bev(self,
+                          sample_token: str,
+                          width: int = 1800,
+                          height: int = 800,
+                          with_anns: bool = True,
+                          bev_max_range: float = 150.0,
+                          bev_resolution: float = 0.1,
+                          intensity: bool = False,
+                          show: bool = True) -> np.ndarray:
+        """
+        Renders the BEV + 6-camera composite for a single sample and returns it as a BGR ndarray.
+        :param sample_token: Token of the sample to render.
+        :param width: Total composite width in pixels (BEV takes left 1/3, cameras right 2/3).
+        :param height: Total composite height in pixels.
+        :param with_anns: Draw 2D/BEV annotations.
+        :param bev_max_range: Forward range in metres for the BEV.
+        :param bev_resolution: Metres per pixel for the BEV.
+        :param intensity: Colour LiDAR points by intensity instead of distance.
+        :param show: Display the result in a cv2 window.
+        :return: BGR ndarray of shape (height, width, 3).
+        """
+        sample_record = self.useful.get('sample', sample_token)
+        left_w = width // 3
+        right_w = width - left_w
+        cell_w = right_w // 3
+        cell_h = height // 2
+        camera_order = ['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR']
+
+        lidar_sd_token = sample_record['data'].get('LIDAR')
+        if lidar_sd_token is not None:
+            lidar_path = self.useful.get_sample_data_path(lidar_sd_token)
+            lidar_pc = LidarPointCloud(data_path=lidar_path, format='USEFUL')
+            boxes = self.useful.get_boxes(sample_token)
+            bev_img = self._render_bev_image(lidar_pc, boxes,
+                                             max_range=bev_max_range,
+                                             resolution=bev_resolution,
+                                             with_anns=with_anns,
+                                             intensity=intensity)
+        else:
+            bev_img = np.zeros((height, left_w, 3), dtype=np.uint8)
+        bev_resized = cv2.resize(bev_img, (left_w, height))
+
+        cells = []
+        for ch in camera_order:
+            sd_token = sample_record['data'].get(ch)
+            if sd_token is None:
+                cells.append(np.zeros((cell_h, cell_w, 3), dtype=np.uint8))
+                continue
+            data_path = self.useful.get_sample_data_path(sd_token)
+            sd_record = self.useful.get('sample_data', sd_token)
+            boxes_2d = self.useful.get_boxes_2d(sd_token) if with_anns else []
+            modality = sd_record['sensor_modality']
+            if modality == 'rgb':
+                img = RGBImage(data_path=data_path).render(
+                    show=False, boxes=boxes_2d, bbox_2d=True)
+            elif modality == 'thermal':
+                img = ThermalImage(data_path).render(
+                    show=False, boxes=boxes_2d, bbox_2d=True)
+            elif modality == 'swir':
+                img = SWIRImage(data_path).render(
+                    show=False, boxes=boxes_2d, bbox_2d=True)
+            elif modality == 'polarimetric':
+                pol = PolarimetricImage(data_path).getMode('RGB')[:, :, [2, 1, 0]]
+                pol = (pol / (np.max(pol) + 1e-6) * 255).astype(np.uint8)
+                img = RGBImage(img=pol).render(show=False, boxes=boxes_2d, bbox_2d=True)
+            else:
+                img = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            cells.append(cv2.resize(img, (cell_w, cell_h)))
+
+        row1 = np.hstack(cells[:3])
+        row2 = np.hstack(cells[3:])
+        frame = np.hstack([bev_resized, np.vstack([row1, row2])])
+
+        if show:
+            cv2.imshow('Sample BEV', frame)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        return frame
+
+    def render_lidar_bev(self,
+                         sample_token: str,
+                         bev_max_range: float = 150.0,
+                         bev_resolution: float = 0.1,
+                         with_anns: bool = True,
+                         intensity: bool = False,
+                         show: bool = True) -> np.ndarray:
+        """
+        Renders the BEV of the LiDAR point cloud for a single sample.
+        :param sample_token: Token of the sample to render.
+        :param bev_max_range: Forward range in metres.
+        :param bev_resolution: Metres per pixel.
+        :param with_anns: Draw 3D box footprints.
+        :param intensity: Colour points by intensity instead of distance.
+        :param show: Display the result in a cv2 window.
+        :return: BGR ndarray of the BEV image.
+        """
+        sample_record = self.useful.get('sample', sample_token)
+        lidar_sd_token = sample_record['data'].get('LIDAR')
+        if lidar_sd_token is None:
+            return np.zeros((int(bev_max_range / bev_resolution), 10, 3), dtype=np.uint8)
+        lidar_path = self.useful.get_sample_data_path(lidar_sd_token)
+        lidar_pc = LidarPointCloud(data_path=lidar_path, format='USEFUL')
+        boxes = self.useful.get_boxes(sample_token) if with_anns else []
+        bev = self._render_bev_image(lidar_pc, boxes,
+                                     max_range=bev_max_range,
+                                     resolution=bev_resolution,
+                                     with_anns=with_anns,
+                                     intensity=intensity)
+        if show:
+            cv2.imshow('LiDAR BEV', bev)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        return bev
+
+    def _render_bev_image(self,
+                          lidar_pc,
+                          boxes,
+                          max_range: float = 150.0,
+                          resolution: float = 0.1,
+                          with_anns: bool = True,
+                          intensity: bool = False) -> np.ndarray:
+        """
+        Renders a Bird's Eye View image of a LiDAR point cloud with optional 3D box footprints.
+        The view covers the forward hemisphere (60 deg HFOV): x in [0, max_range],
+        y in [-max_range*tan(30deg), max_range*tan(30deg)].
+        Forward direction is up in the resulting image.
+        :return: BGR ndarray (img_h, img_w, 3).
+        """
+        y_half = max_range * np.tan(np.radians(30))
+        img_h = int(max_range / resolution)
+        img_w = int(2 * y_half / resolution)
+        bev = np.zeros((img_h, img_w, 3), dtype=np.uint8)
+
+        points = lidar_pc.points  # (N, 3+)
+        mask = (points[:, 0] > 0) & (points[:, 0] < max_range) & (np.abs(points[:, 1]) < y_half)
+        pts = points[mask]
+
+        if len(pts) > 0:
+            if intensity:
+                colors = lidar_pc.get_color_for_intensity(max=2000)[mask]
+            else:
+                colors = lidar_pc.get_color_for_distance(color_palette='jet', loop=10)[mask]
+            py = np.clip(((max_range - pts[:, 0]) / resolution).astype(int), 0, img_h - 1)
+            px = np.clip(((y_half - pts[:, 1]) / resolution).astype(int), 0, img_w - 1)
+            bev[py, px] = colors[:, :3]
+
+        if with_anns:
+            for box in boxes:
+                if not (0 < box.center[0] < max_range and abs(box.center[1]) < y_half):
+                    continue
+                # Bottom footprint corners (indices 4-7): (4, 3) → take X, Y columns
+                corners = box.corners()[4:, :2]
+                pts_px = np.array([
+                    [int((y_half - c[1]) / resolution), int((max_range - c[0]) / resolution)]
+                    for c in corners
+                ], dtype=np.int32)
+                cv2.polylines(bev, [pts_px.reshape(-1, 1, 2)], isClosed=True,
+                              color=box.color, thickness=2)
+                # Forward direction: center → midpoint of front edge (bottom corners 4, 5)
+                cx_px = int((y_half - box.center[1]) / resolution)
+                cy_px = int((max_range - box.center[0]) / resolution)
+                front_mid = ((pts_px[0] + pts_px[1]) // 2)
+                cv2.line(bev, (cx_px, cy_px), tuple(front_mid), box.color, 2)
+
+        # --- Metric axes overlay ---
+        grid_color = (50, 50, 50)
+        label_color = (180, 180, 180)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.4
+        # Forward (depth) grid lines every 25 m
+        for x_m in range(25, int(max_range) + 1, 25):
+            py_line = int((max_range - x_m) / resolution)
+            if 0 <= py_line < img_h:
+                cv2.line(bev, (0, py_line), (img_w - 1, py_line), grid_color, 1)
+                cv2.putText(bev, f'{x_m}m', (5, py_line - 3),
+                            font, font_scale, label_color, 1, cv2.LINE_AA)
+        # Lateral (y) grid lines every 25 m
+        y_step = 25
+        y_ticks = range(-int(y_half // y_step) * y_step,
+                        int(y_half // y_step) * y_step + 1, y_step)
+        for y_m in y_ticks:
+            px_line = int((y_half - y_m) / resolution)
+            if 0 <= px_line < img_w:
+                cv2.line(bev, (px_line, 0), (px_line, img_h - 1), grid_color, 1)
+                label = f'{y_m}m'
+                (tw, _th), _ = cv2.getTextSize(label, font, font_scale, 1)
+                cv2.putText(bev, label, (px_line - tw // 2, img_h - 5),
+                            font, font_scale, label_color, 1, cv2.LINE_AA)
+        # Ego marker at bottom-centre
+        ego_px = int(y_half / resolution)
+        cv2.drawMarker(bev, (ego_px, img_h - 1), (255, 255, 255),
+                       cv2.MARKER_CROSS, 12, 2)
+
+        return bev
+
     def render_scene(self,
-                             scene_token: str,
-                             save_path: str,
-                             width: int = 960,
-                             height: int = 480,
-                             fps: int = 7,
-                             with_anns: bool = True,
-                             list_instances: list = [],
-                             with_instance: bool = False,
-                             with_lidar: bool = False,
-                             filter_category: list = [],
-                             canvas_shape: tuple = (2,3),
-                             canvas_order=['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR']):
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for MP4 format
+                     scene_token: str,
+                     save_path: str,
+                     fps: int = 7,
+                     width: int = 1800,
+                     height: int = 800,
+                     with_anns: bool = True,
+                     bev_max_range: float = 150.0,
+                     bev_resolution: float = 0.1,
+                     intensity: bool = False):
+        """
+        Renders a scene to a video. Each frame has:
+          - Left third: Bird's Eye View of LiDAR with projected 3D box footprints.
+          - Right two thirds: 2x3 grid of cameras [WIDE_LEFT, NARROW, WIDE_RIGHT;
+                                                    LWIR, POLARIMETRIC(RGB), SWIR].
+        :param scene_token: Scene token.
+        :param save_path: Output video path (e.g. 'scene.mp4').
+        :param fps: Frames per second.
+        :param width: Total output video width in pixels.
+        :param height: Total output video height in pixels.
+        :param with_anns: Whether to draw 2D/BEV annotations.
+        :param bev_max_range: Forward range in metres for the BEV (default 150).
+        :param bev_resolution: Metres per pixel for the BEV (default 0.1).
+        :param intensity: Colour LiDAR points by intensity instead of distance.
+        """
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
         scene_record = self.useful.get('scene', scene_token)
         sample_token = scene_record['first_sample_token']
-        for i in tqdm.tqdm(range(scene_record['nbr_samples']), 'Writing video...'):
+
+        left_w = width // 3
+        right_w = width - left_w
+        cell_w = right_w // 3
+        cell_h = height // 2
+        camera_order = ['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR']
+
+        for _ in tqdm.tqdm(range(scene_record['nbr_samples']), 'Writing video...'):
             sample_record = self.useful.get('sample', sample_token)
-            img, _ = self.useful.render_sample(sample_record['token'],
-                            with_lidar= with_lidar,
-                            with_anns=with_anns,
-                            list_instances=list_instances,
-                            with_instance=with_instance,
-                            canvas_shape=canvas_shape,
-                            canvas_order=canvas_order,
-                            filter_category=filter_category,
-                            show=False,
-                            verbose=False)
+
+            # --- BEV (left panel) ---
+            lidar_sd_token = sample_record['data'].get('LIDAR')
+            if lidar_sd_token is not None:
+                lidar_path = self.useful.get_sample_data_path(lidar_sd_token)
+                lidar_pc = LidarPointCloud(data_path=lidar_path, format='USEFUL')
+                boxes = self.useful.get_boxes(sample_record['token'])
+                bev_img = self._render_bev_image(lidar_pc, boxes,
+                                                 max_range=bev_max_range,
+                                                 resolution=bev_resolution,
+                                                 with_anns=with_anns,
+                                                 intensity=intensity)
+            else:
+                bev_img = np.zeros((height, left_w, 3), dtype=np.uint8)
+            bev_resized = cv2.resize(bev_img, (left_w, height))
+
+            # --- Camera grid (right panel) ---
+            cells = []
+            for ch in camera_order:
+                sd_token = sample_record['data'].get(ch)
+                if sd_token is None:
+                    cells.append(np.zeros((cell_h, cell_w, 3), dtype=np.uint8))
+                    continue
+                data_path = self.useful.get_sample_data_path(sd_token)
+                sd_record = self.useful.get('sample_data', sd_token)
+                boxes_2d = self.useful.get_boxes_2d(sd_token) if with_anns else []
+                modality = sd_record['sensor_modality']
+                if modality == 'rgb':
+                    img = RGBImage(data_path=data_path).render(
+                        show=False, boxes=boxes_2d, bbox_2d=True)
+                elif modality == 'thermal':
+                    img = ThermalImage(data_path).render(
+                        show=False, boxes=boxes_2d, bbox_2d=True)
+                elif modality == 'swir':
+                    img = SWIRImage(data_path).render(
+                        show=False, boxes=boxes_2d, bbox_2d=True)
+                elif modality == 'polarimetric':
+                    pol = PolarimetricImage(data_path).getMode('RGB')[:, :, [2, 1, 0]]
+                    pol = (pol / (np.max(pol) + 1e-6) * 255).astype(np.uint8)
+                    img = RGBImage(img=pol).render(show=False, boxes=boxes_2d, bbox_2d=True)
+                else:
+                    img = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+                if len(img.shape) == 2:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                cells.append(cv2.resize(img, (cell_w, cell_h)))
+
+            row1 = np.hstack(cells[:3])
+            row2 = np.hstack(cells[3:])
+            right_grid = np.vstack([row1, row2])
+
+            frame = np.hstack([bev_resized, right_grid])
+            out.write(frame)
+
             sample_token = sample_record['next']
-            out.write(img)
+            if sample_token == '':
+                break
+
         out.release()
         print(f'Video saved at {save_path}')
         

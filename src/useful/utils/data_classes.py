@@ -1297,7 +1297,7 @@ class Image:
 
         if radar is not None:
             pixels = radar.project_points_to_image(camera_intrinsics=camera_intrinsics,
-                                                   extrinsics=extrinsic,
+                                                   extrinsic=extrinsic,
                                                    distortion_vector=distortion_vector)
             
             colors = radar.get_color_for_distance(color_palette=colormap)
