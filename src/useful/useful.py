@@ -387,6 +387,110 @@ class USEFUL:
         return sample_list
         
         
+    def get_ego_trajectory(self,
+                           sample_token: str,
+                           num_samples: int,
+                           forward: bool = True) -> list:
+        '''
+        Returns ego-motion data for a sequence of samples expressed in the local body
+        frame of the reference sample (sample_token).
+
+        This is the inverse of PointCloud.local_to_geodetic: positions, velocities and
+        orientations from lat/lon/heading are converted to the body frame of sample 0.
+
+        :param sample_token: Reference sample token (defines the origin frame).
+        :param num_samples: Number of additional samples to traverse beyond the reference.
+        :param forward: If True, traverse via sample['next']; if False, via sample['prev'].
+        :return: List of up to num_samples+1 dicts, one per sample:
+            {
+              'token': str,        # sample token
+              'x': float,          # forward offset in ref body frame (m)
+              'y': float,          # lateral offset in ref body frame (m)
+              'z': float,          # vertical offset in ref body frame (m)
+              'vx': float,         # forward velocity in current body frame (m/s)
+              'vy': float,         # lateral velocity in current body frame (m/s)
+              'R': np.ndarray,     # 3x3 rotation: current body frame -> ref body frame
+            }
+        The first entry always has x=y=z=0 and R=identity.
+        '''
+        try:
+            from pyproj import CRS, Transformer
+        except ImportError as e:
+            raise ImportError(
+                "The 'pyproj' package is required for get_ego_trajectory. "
+                "Install it with `pip install pyproj`."
+            ) from e
+
+        geodetic_crs = CRS.from_epsg(4979)
+        ecef_crs = CRS.from_epsg(4978)
+        geo_to_ecef = Transformer.from_crs(geodetic_crs, ecef_crs, always_xy=True)
+
+        def enu_to_ecef_matrix(lat, lon):
+            lat_r = np.radians(lat)
+            lon_r = np.radians(lon)
+            return np.array([
+                [-np.sin(lon_r), -np.sin(lat_r) * np.cos(lon_r),  np.cos(lat_r) * np.cos(lon_r)],
+                [ np.cos(lon_r), -np.sin(lat_r) * np.sin(lon_r),  np.cos(lat_r) * np.sin(lon_r)],
+                [ 0,              np.cos(lat_r),                   np.sin(lat_r)]
+            ])
+
+        def make_R_heading(heading_deg):
+            h = -(np.radians(heading_deg) - np.pi / 2)
+            return np.array([
+                [ np.cos(h), -np.sin(h), 0],
+                [ np.sin(h),  np.cos(h), 0],
+                [ 0,          0,         1]
+            ])
+
+        ref_record = self.get('sample', sample_token)
+        ref_ins = self.get('ego_pose', ref_record['ego_pose_token'])['INS']
+        ref_lon = float(ref_ins['lon_deg'])
+        ref_lat = float(ref_ins['lat_deg'])
+        ref_alt = float(ref_ins['alt_m'])
+        ref_ecef = np.array(geo_to_ecef.transform(ref_lon, ref_lat, ref_alt))
+        R_enu_ecef = enu_to_ecef_matrix(ref_lat, ref_lon)
+        R_heading_ref = make_R_heading(float(ref_ins['heading_deg']))
+
+        results = []
+        current_token = sample_token
+        for _ in range(num_samples + 1):
+            rec = self.get('sample', current_token)
+            ins = self.get('ego_pose', rec['ego_pose_token'])['INS']
+
+            lon = float(ins['lon_deg'])
+            lat = float(ins['lat_deg'])
+            alt = float(ins['alt_m'])
+
+            ecef_i = np.array(geo_to_ecef.transform(lon, lat, alt))
+            enu = R_enu_ecef.T @ (ecef_i - ref_ecef)
+            local = R_heading_ref.T @ enu
+
+            R_heading_i = make_R_heading(float(ins['heading_deg']))
+            v_enu = np.array([float(ins['velocity_east_mps']),
+                              float(ins['velocity_north_mps']),
+                              -float(ins['velocity_down_mps'])])
+            v_local = R_heading_ref.T @ v_enu
+
+            R_rel = R_heading_ref.T @ R_heading_i
+
+            results.append({
+                'token': current_token,
+                'x': float(local[0]),
+                'y': float(local[1]),
+                'z': float(local[2]),
+                'vx': float(v_local[0]),
+                'vy': float(v_local[1]),
+                'R': R_rel
+            })
+
+            next_key = 'next' if forward else 'prev'
+            next_tok = rec.get(next_key, '')
+            if not next_tok:
+                break
+            current_token = next_tok
+
+        return results
+
     def get_scene_files(self,
                         scene_token: str) -> dict:
         '''
