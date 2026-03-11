@@ -1460,10 +1460,10 @@ class PolarimetricImage(Image):
         B90  = img[::4, ::4]
         if mode == 'B90':
             return B90 / 255
-        B45  = img[1::4, ::4]
+        B45  = img[::4, 1::4]
         if mode == 'B45':
             return B45 / 255
-        B135 = img[::4, 1::4]
+        B135 = img[1::4, ::4]
         if mode == 'B135':
             return B135 / 255
         B0   = img[1::4, 1::4]
@@ -1472,79 +1472,79 @@ class PolarimetricImage(Image):
 
         # Gb
         Gb90  = img[::4, 2::4]
-        if mode == 'Gr90':
-            return Gr90 / 255
-        Gb45  = img[1::4, 2::4]
-        if mode == 'Gr45':
-            return Gr45 / 255
-        Gb135 = img[::4, 3::4]
-        if mode == 'Gr135':
-            return Gr135 / 255
-        Gb0   = img[1::4, 3::4]
-        if mode == 'Gr0':
-            return Gr0 / 255
-        
-        # Gr
-        Gr90  = img[2::4, ::4]
         if mode == 'Gb90':
             return Gb90 / 255
-        Gr45  = img[2::4, 1::4]
+        Gb45  = img[::4, 3::4]
         if mode == 'Gb45':
             return Gb45 / 255
-        Gr135 = img[3::4, ::4]
+        Gb135 = img[1::4, 2::4]
         if mode == 'Gb135':
             return Gb135 / 255
-        Gr0   = img[3::4, 1::4]
+        Gb0   = img[1::4, 3::4]
         if mode == 'Gb0':
             return Gb0 / 255
-        
+
+        # Gr
+        Gr90  = img[2::4, ::4]
+        if mode == 'Gr90':
+            return Gr90 / 255
+        Gr45  = img[2::4, 1::4]
+        if mode == 'Gr45':
+            return Gr45 / 255
+        Gr135 = img[3::4, ::4]
+        if mode == 'Gr135':
+            return Gr135 / 255
+        Gr0   = img[3::4, 1::4]
+        if mode == 'Gr0':
+            return Gr0 / 255
+
         # R
         R90  = img[2::4, 2::4]
         if mode == 'R90':
             return R90 / 255
-        R45  = img[3::4, 2::4]
+        R45  = img[2::4, 3::4]
         if mode == 'R45':
             return R45 / 255
-        R135 = img[2::4, 3::4]
+        R135 = img[3::4, 2::4]
         if mode == 'R135':
             return R135 / 255
         R0   = img[3::4, 3::4]
         if mode == 'R0':
             return R0 / 255
-        
+
         # RGB
 
         I0_raw = np.empty((R0.shape[0] * 2, R0.shape[1] * 2), dtype=np.uint8)
         I0_raw[::2, ::2] = B0
-        I0_raw[1::2, ::2] = Gb0
-        I0_raw[::2, 1::2] = Gr0
+        I0_raw[::2, 1::2] = Gb0
+        I0_raw[1::2, ::2] = Gr0
         I0_raw[1::2, 1::2] = R0
         I0 = cv2.cvtColor(I0_raw, cv2.COLOR_BAYER_BG2BGR) / 255
         if mode == 'RGB0':
             return I0
-        
+
         I90_raw = np.empty((R90.shape[0] * 2, R90.shape[1] * 2), dtype=np.uint8)
         I90_raw[::2, ::2] = B90
-        I90_raw[1::2, ::2] = Gb90
-        I90_raw[::2, 1::2] = Gr90
+        I90_raw[::2, 1::2] = Gb90
+        I90_raw[1::2, ::2] = Gr90
         I90_raw[1::2, 1::2] = R90
         I90 = cv2.cvtColor(I90_raw, cv2.COLOR_BAYER_BG2BGR) / 255
         if mode == 'RGB90':
             return I90
-        
+
         I45_raw = np.empty((R45.shape[0] * 2, R45.shape[1] * 2), dtype=np.uint8)
         I45_raw[::2, ::2] = B45
-        I45_raw[1::2, ::2] = Gb45
-        I45_raw[::2, 1::2] = Gr45
+        I45_raw[::2, 1::2] = Gb45
+        I45_raw[1::2, ::2] = Gr45
         I45_raw[1::2, 1::2] = R45
         I45 = cv2.cvtColor(I45_raw, cv2.COLOR_BAYER_BG2BGR) / 255
         if mode == 'RGB45':
             return I45
-        
+
         I135_raw = np.empty((R135.shape[0] * 2, R135.shape[1] * 2), dtype=np.uint8)
         I135_raw[::2, ::2] = B135
-        I135_raw[1::2, ::2] = Gb135
-        I135_raw[::2, 1::2] = Gr135
+        I135_raw[::2, 1::2] = Gb135
+        I135_raw[1::2, ::2] = Gr135
         I135_raw[1::2, 1::2] = R135
         I135 = cv2.cvtColor(I135_raw, cv2.COLOR_BAYER_BG2BGR) / 255
         if mode == 'RGB135':
