@@ -39,6 +39,8 @@ This devkit provides a Python API to load, query, visualize, and export all data
 | `SWIR` | SWIR | Shortwave infrared camera |
 | `POLARIMETRIC` | Polarimetric | Full Stokes polarimetric camera (DOLP, AOLP, RGB0/45/90/135) |
 
+The LiDAR sensor used is not a conventional rotatory LiDAR. It is an `L3CAM`, produced by [Beamagine S.L.](https://beamagine.com/), multimodal embbeded system containing a thermal camera, a polarimetric camera and a MEMs-based quasi-solid state LiDAR that produce high-density point clouds within a FOV of (60º, 20º).
+
 <div align="center">
 <p align="center">
   <img src="media/fov_cotxe.png" width="600">
