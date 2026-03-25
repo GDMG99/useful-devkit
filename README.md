@@ -148,11 +148,13 @@ This work would not have been possible without the open-source works of [nuScene
 If you use the USEFUL dataset or this devkit in your research, please cite:
 
 ```bibtex
-@inproceedings{useful2025,
-  title     = {USEFUL: A Unified Multimodal Dataset for Urban Autonomous Driving Perception},
-  author    = {TODO},
-  booktitle = {TODO},
-  year      = {2025},
+@misc{gerard_demas-giménez_2026,
+	author       = { Gerard DeMas-Giménez and Adrià Subirana and Pablo García-Gómez and Eduardo Bernal and Josep R. Casas and Santiago Royo },
+	title        = { USEFUL (Revision 0e2fc7e) },
+	year         = 2026,
+	url          = { https://huggingface.co/datasets/GerardDMG/USEFUL },
+	doi          = { 10.57967/hf/8147 },
+	publisher    = { Hugging Face }
 }
 ```
 
