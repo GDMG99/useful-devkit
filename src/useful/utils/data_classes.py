@@ -79,7 +79,7 @@ class PointCloud:
             distances = np.sqrt(self.points[:,0]**2 + self.points[:,1]**2 + self.points[:,2]**2)
         self.points = self.points[np.logical_and(distances > min , distances < max), :]
         self.intensity = self.intensity[np.logical_and(distances > min , distances < max)]
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
         if np.asarray(self.point_cloud.colors).size != 0: 
             colors = np.asarray(self.point_cloud.colors)
             colors = colors[np.logical_and(distances > min, distances < max), :]
@@ -192,14 +192,14 @@ class PointCloud:
                   translation: np.ndarray) -> None:
         
         self.points = self.points + translation
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
     
     def rotate(self,
                rotation: np.ndarray) -> None:
         
         assert rotation.shape == (3,3), 'Rotation has to be a 3 by 3 matrix'
         self.points = (rotation @ self.points.T).T
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
 
     def transform(self,
                   transformation: np.ndarray) -> None:
@@ -209,7 +209,7 @@ class PointCloud:
         transformed_points = (transformation @ homogeneous_points.T).T
 
         self.points = transformed_points[:,:3]
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
         
     def transform_quat(self,
                        quat: np.ndarray,
@@ -222,7 +222,7 @@ class PointCloud:
         transformed_points = (H @ homogeneous_points.T).T
 
         self.points = transformed_points[:,:3]
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
     
     def render(self,
                vis: o3d.visualization.Visualizer = None,
@@ -697,7 +697,8 @@ class LidarPointCloud(PointCloud):
             assert len(self.points) ==  len(color), f'Points ({len(self.points)}) and color ({len(color)}) must have the same length'
             self.color = color
         self.point_cloud = o3d.geometry.PointCloud()
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        # Vector3dVector converts float32 input element-wise (~400x slower than float64)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
 
     def copy(self) -> 'LidarPointCloud':
         """
@@ -705,35 +706,38 @@ class LidarPointCloud(PointCloud):
         """
         return copy.deepcopy(self)
     
+    # Record layout of the USEFUL binary pcd: x y z (float32), intensity (uint16), rgb (uint32),
+    # packed without alignment padding (18 bytes/point, little-endian).
+    USEFUL_PCD_DTYPE = np.dtype([('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
+                                 ('intensity', '<u2'), ('rgb', '<u4')])
+
     @staticmethod
     def __readUsefulPC__(data_path: str):
-        format_string = "=fffHI" # f=float(4), H=uint16(2), I=uint32(4), = --> no padding for H
-        data_size = struct.calcsize(format_string)  
-        data = []  
+        """
+        Reads a USEFUL binary pcd in one vectorized pass.
 
+        Returns:
+            points: (N, 3) float32
+            intensity: (N,) float32
+            rgb: (N, 3) uint8. This is the sensor's own false-color-by-range palette
+                 baked into the file, not camera color.
+        """
+        dtype = LidarPointCloud.USEFUL_PCD_DTYPE
         with open(data_path, 'rb') as file:
             while True:
-                line = file.readline().decode().strip()
-                if line.startswith("DATA binary"):
+                line = file.readline()
+                if not line or line.startswith(b"DATA binary"):
                     break
+            buffer = file.read()
 
-            # Read binary data
-            while True:
-                binary_data = file.read(data_size)
-                if not binary_data:
-                    break  # End of file reached
+        n_points = len(buffer) // dtype.itemsize
+        data = np.frombuffer(buffer, dtype=dtype, count=n_points)
 
-                # Unpack the binary data
-                unpacked_data = struct.unpack(format_string, binary_data)
-                data.append(unpacked_data)
-
-        # Convert collected data to numpy array
-        data = np.array(data, dtype=np.float32)
-
-        # Split into points, intensity, and RGB
-        points = data[:, :3]
-        intensity = data[:, 3]
-        rgb = [(0, 0, 0) for rgb_i in data[:, 4]] #[(rgb_i >> 16 & 0xFF, rgb_i >> 8 & 0xFF, rgb_i & 0xFF) for rgb_i in data[:, 4]]
+        points = np.stack([data['x'], data['y'], data['z']], axis=1)
+        intensity = data['intensity'].astype(np.float32)
+        rgb = np.stack([(data['rgb'] >> 16) & 0xFF,
+                        (data['rgb'] >> 8) & 0xFF,
+                        data['rgb'] & 0xFF], axis=1).astype(np.uint8)
         return points, intensity, rgb
     
     def save_pcd(self,
@@ -929,7 +933,7 @@ DATA binary
             colors[:,[2,0]] = colors[:,[0,2]] 
         if visualization:
             pointcloud = o3d.geometry.PointCloud()
-            pointcloud.points = o3d.utility.Vector3dVector(self.points)
+            pointcloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
             pointcloud.colors = o3d.utility.Vector3dVector(colors / 255)
             o3d.visualization.draw_geometries([pointcloud])
         return colors
@@ -1038,7 +1042,7 @@ class RadarPointCloud(PointCloud):
             self.points = points
             self.data = None
         self.point_cloud = o3d.geometry.PointCloud()
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
 
 
     def __readRadarPointCloud__(self,
@@ -1116,7 +1120,7 @@ class RadarPointCloud(PointCloud):
         if self.data is not None:
             self.data = self.data[np.logical_and(distances > min , distances < max), :]
         self.points = self.points[np.logical_and(distances > min , distances < max), :]
-        self.point_cloud.points = o3d.utility.Vector3dVector(self.points)
+        self.point_cloud.points = o3d.utility.Vector3dVector(np.asarray(self.points, dtype=np.float64))
         if np.asarray(self.point_cloud.colors).size != 0: 
             colors = np.asarray(self.point_cloud.colors)
             colors = colors[np.logical_and(distances > min, distances < max), :]
