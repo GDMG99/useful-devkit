@@ -138,6 +138,43 @@ python src/useful/utils/create_mmdet3d_pkl.py \
 --verbose 
 ```
 ---
+
+## Interactive viewer
+
+`useful.viewer` is a browser-based point-cloud viewer with keyboard shortcuts. The
+server only streams data; rendering happens in your browser, so it runs on a
+headless machine. Install the extra once (`pip install -e ".[viewer]"`), then:
+
+```bash
+python -m useful.viewer --dataroot data/useful --version v1.1 --port 8080
+```
+
+From another machine, forward the port and open `http://localhost:8080`:
+
+```bash
+ssh -N -L 8080:localhost:8080 <user>@<server>
+```
+
+| Key | Action |
+|---|---|
+| `N` / `P` (`→` / `←`) | next / previous sample (`Shift` = ±10) · `Space` play/pause |
+| `,` / `.` | previous / next scene |
+| `M` (`Shift+M`) · `0` | cycle camera **fusion** modality (reverse) · none |
+| `1`–`6` · `V` | toggle camera panels WIDE_LEFT / NARROW / WIDE_RIGHT / LWIR / POLARIMETRIC / SWIR (any number at once) · show/hide all |
+| `L` / `D` | toggle LiDAR overlay / 2D boxes in the camera panels |
+| `I` | cycle colour source: distance / intensity / height |
+| `C` | cycle colormap: jet / turbo / viridis / plasma / gray |
+| `F` (`Shift+F`) | class filter panel (reset) — applies to 3D boxes, 2D boxes and the instance list |
+| `X` / `Shift+X` · `J` · `Esc` | follow next / previous instance (white outline, camera tracks it) · jump to its next frame · stop |
+| `B` / `R` / `G` | toggle 3D boxes / radar / grid |
+| `+` / `-` · `[` / `]` | point size · max range ∓10 m |
+| `T` / `Z` | top-down view / reset view · `H` help |
+
+The same shortcuts drive an Open3D desktop version for machines with a display:
+`python -m useful.viewer.desktop --scene dia_19` (there `0`–`6` select the fusion
+modality). The URL hash keeps scene, sample, colours, open cameras, hidden
+classes and the followed instance, so a view can be shared as a link.
+
 ## Acknowledgements
 
 This work would not have been possible without the open-source works of [nuScenes](https://github.com/nutonomy/nuscenes-devkit) and [Truckscenes](https://github.com/TUMFTM/truckscenes-devkit).
