@@ -138,6 +138,38 @@ python src/useful/utils/create_mmdet3d_pkl.py \
 --verbose 
 ```
 ---
+
+## Interactive viewer
+
+`useful.viewer` is a browser-based point-cloud viewer with keyboard shortcuts. The
+server only streams data; rendering happens in your browser, so it runs on a
+headless machine. Install the extra once (`pip install -e ".[viewer]"`), then:
+
+```bash
+python -m useful.viewer --dataroot data/useful --version v1.1 --port 8080
+```
+
+From another machine, forward the port and open `http://localhost:8080`:
+
+```bash
+ssh -N -L 8080:localhost:8080 <user>@<server>
+```
+
+| Key | Action |
+|---|---|
+| `N` / `P` (`→` / `←`) | next / previous sample (`Shift` = ±10) · `Space` play/pause |
+| `,` / `.` | previous / next scene |
+| `M` (`Shift+M`) | cycle camera fusion modality (reverse) — `0`–`6` select directly |
+| `I` | cycle colour source: distance / intensity / height |
+| `C` | cycle colormap: jet / turbo / viridis / plasma / gray |
+| `B` / `R` / `V` / `G` | toggle 3D boxes / radar / camera panel / grid |
+| `+` / `-` · `[` / `]` | point size · max range ∓10 m |
+| `T` / `Z` | top-down view / reset view · `H` help |
+
+The same shortcuts drive an Open3D desktop version for machines with a display:
+`python -m useful.viewer.desktop --scene dia_19`. The URL hash keeps scene,
+sample and colour state, so a view can be shared as a link.
+
 ## Acknowledgements
 
 This work would not have been possible without the open-source works of [nuScenes](https://github.com/nutonomy/nuscenes-devkit) and [Truckscenes](https://github.com/TUMFTM/truckscenes-devkit).

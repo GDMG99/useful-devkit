@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>USEFUL viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1216; --fg:#e6e9ee; --dim:#9aa3ad; --accent:#3fb6c4; --panel:rgba(16,19,24,.86); }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font: 13px/1.45 "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; overflow:hidden; }
+  #view { position:fixed; inset:0; }
+  .panel { position:fixed; background:var(--panel); border:1px solid #2a323c; border-radius:6px;
+    padding:10px 12px; backdrop-filter: blur(4px); }
+  #hud { top:12px; left:12px; min-width:340px; white-space:pre; }
+  #hud .k { color:var(--dim); }
+  #hud .v { color:var(--fg); }
+  #hud .a { color:var(--accent); font-weight:600; }
+  #controls { top:12px; right:12px; display:flex; gap:8px; align-items:center; }
+  select, button { background:#1a2028; color:var(--fg); border:1px solid #2f3944; border-radius:4px;
+    padding:4px 8px; font:inherit; }
+  button:hover, select:hover { border-color: var(--accent); }
+  #timeline { left:12px; right:12px; bottom:12px; display:flex; gap:12px; align-items:center; }
+  #timeline input[type=range] { flex:1; accent-color: var(--accent); }
+  #timeline .idx { min-width:90px; text-align:right; color:var(--dim); }
+  #campanel { right:12px; bottom:56px; width:420px; padding:6px; }
+  #campanel img { display:block; width:100%; height:auto; border-radius:3px; background:#000; min-height:60px; }
+  #campanel .cap { color:var(--dim); font-size:11.5px; padding:4px 2px 0; display:flex; justify-content:space-between; }
+  #help { top:50%; left:50%; transform:translate(-50%,-50%); white-space:pre; display:none; max-height:90vh; overflow:auto; }
+  #help.show { display:block; }
+  #toast { left:50%; top:12px; transform:translateX(-50%); display:none; color:var(--accent); }
+  .hidden { display:none !important; }
+  kbd { color: var(--accent); }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud" class="panel">loading…</div>
+<div id="controls" class="panel">
+  <label>scene <select id="scene"></select></label>
+  <button id="btnhelp" title="H">? keys</button>
+</div>
+<div id="campanel" class="panel">
+  <img id="camimg" alt="camera">
+  <div class="cap"><span id="camname">camera</span><span>V hides · M/0-6 changes</span></div>
+</div>
+<div id="timeline" class="panel">
+  <button id="btnplay" title="Space">▶</button>
+  <input id="slider" type="range" min="0" max="0" value="0">
+  <span class="idx" id="idx">0 / 0</span>
+</div>
+<pre id="help" class="panel"></pre>
+<div id="toast" class="panel"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(() => {
+'use strict';
+// ------------------------------------------------------------------ state
+const S = {
+  scenes: [], scene: null, samples: [], timestamps: [], i: 0,
+  colorMode: 'distance', cmap: 'jet', modality: 'none',
+  pointSize: 2.0, maxRange: 100, showBoxes: true, showRadar: true, showCam: true, showGrid: true,
+  playing: false, cfg: null,
+};
+let cache = { token: null, pts: null, inten: null, colors: null, colorsKey: null };
+let reqId = 0;
+
+// ------------------------------------------------------------------ three.js
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const scene3 = new THREE.Scene();
+scene3.background = new THREE.Color(0x0f1216);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+camera.up.set(0, 0, 1);
+const controls = new THREE.OrbitControls(camera, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.screenSpacePanning = false;
+function resetView() { camera.position.set(-28, 0, 16); controls.target.set(25, 0, 0); controls.update(); }
+function topView() { camera.position.set(40, 0, 140); controls.target.set(40, 0, 0); controls.update(); }
+resetView();
+
+const GROUND_Z = -1.8;   // approximate road height below the LiDAR origin
+const grid = new THREE.GridHelper(300, 30, 0x2a323c, 0x1c232b); grid.rotateX(Math.PI / 2); grid.position.z = GROUND_Z; scene3.add(grid);
+const axes = new THREE.AxesHelper(3); scene3.add(axes);
+
+const ptsGeom = new THREE.BufferGeometry();
+const ptsMat = new THREE.PointsMaterial({ size: S.pointSize, vertexColors: true, sizeAttenuation: false });
+const ptsObj = new THREE.Points(ptsGeom, ptsMat); ptsObj.frustumCulled = false; scene3.add(ptsObj);
+
+const boxGeom = new THREE.BufferGeometry();
+const boxObj = new THREE.LineSegments(boxGeom, new THREE.LineBasicMaterial({ vertexColors: true })); scene3.add(boxObj);
+const radarGeom = new THREE.BufferGeometry();
+const radarObj = new THREE.Points(radarGeom, new THREE.PointsMaterial({ size: 7, vertexColors: true, sizeAttenuation: false })); scene3.add(radarObj);
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize); resize();
+(function loop() { controls.update(); renderer.render(scene3, camera); requestAnimationFrame(loop); })();
+
+// ------------------------------------------------------------------ helpers
+const $ = id => document.getElementById(id);
+const toast = (msg, ms = 1400) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); };
+const token = () => S.samples[S.i];
+async function getJSON(u) { const r = await fetch(u); if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }
+async function getBuf(u) { const r = await fetch(u); if (!r.ok) throw new Error(u + ' ' + r.status); return r.arrayBuffer(); }
+function colorQuery() {
+  return `mode=${S.colorMode}&cmap=${S.cmap}&modality=${S.modality}&max_range=${S.maxRange}`;
+}
+
+// ------------------------------------------------------------------ loading
+async function loadSample() {
+  const tok = token(); if (!tok) return;
+  const my = ++reqId;
+  $('slider').value = S.i; $('idx').textContent = `${S.i + 1} / ${S.samples.length}`;
+  writeHash();
+  const needPts = cache.token !== tok;
+  const ckey = tok + '|' + colorQuery();
+  const jobs = [
+    needPts ? getBuf(`/api/sample/${tok}/points`) : null,
+    cache.colorsKey !== ckey ? getBuf(`/api/sample/${tok}/colors?${colorQuery()}`) : null,
+    needPts ? getJSON(`/api/sample/${tok}/info`) : null,
+    needPts && S.showBoxes ? getJSON(`/api/sample/${tok}/boxes`) : null,
+    needPts && S.showRadar ? getJSON(`/api/sample/${tok}/radar`) : null,
+  ];
+  let res;
+  try { res = await Promise.all(jobs); } catch (e) { toast('load failed: ' + e.message, 3000); return; }
+  if (my !== reqId) return;                      // a newer request superseded this one
+  const [pbuf, cbuf, info, boxes, radar] = res;
+  if (pbuf) { cache.pts = new Float32Array(pbuf); cache.token = tok; cache.info = info; cache.boxes = boxes; cache.radar = radar; }
+  if (cbuf) { cache.colors = new Uint8Array(cbuf); cache.colorsKey = ckey; }
+  if (boxes) cache.boxes = boxes;
+  if (radar) cache.radar = radar;
+  rebuildCloud(); rebuildBoxes(); rebuildRadar(); updateHud(); updateCam();
+}
+
+function rebuildCloud() {
+  const p = cache.pts, c = cache.colors; if (!p || !c) return;
+  const n = p.length / 3, r2 = S.maxRange * S.maxRange;
+  const pos = new Float32Array(p.length), col = new Uint8Array(c.length);
+  let m = 0;
+  for (let i = 0; i < n; i++) {
+    const x = p[3*i], y = p[3*i+1], z = p[3*i+2];
+    if (x*x + y*y + z*z > r2) continue;
+    pos[3*m] = x; pos[3*m+1] = y; pos[3*m+2] = z;
+    col[3*m] = c[3*i]; col[3*m+1] = c[3*i+1]; col[3*m+2] = c[3*i+2]; m++;
+  }
+  ptsGeom.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, 3*m), 3));
+  ptsGeom.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, 3*m), 3, true));
+  ptsGeom.computeBoundingSphere();
+  ptsMat.size = S.pointSize; ptsMat.needsUpdate = true;
+  S.shown = m; S.total = n;
+}
+
+const EDGES = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+function rebuildBoxes() {
+  const boxes = (S.showBoxes && cache.boxes) || [];
+  const pos = new Float32Array(boxes.length * 24 * 3 + boxes.length * 6), col = new Float32Array(pos.length);
+  let k = 0;
+  for (const b of boxes) {
+    const cr = b.corners, c = b.color.map(v => v / 255);
+    const segs = EDGES.map(e => [cr[e[0]], cr[e[1]]]);
+    // heading tick: centre -> middle of the front face (corners 0,1,4,5)
+    const f = [0,1,2].map(a => (cr[0][a]+cr[1][a]+cr[4][a]+cr[5][a]) / 4);
+    segs.push([b.center, f]);
+    for (const [a, bb] of segs) { for (const q of [a, bb]) { pos.set(q, k); col.set(c, k); k += 3; } }
+  }
+  boxGeom.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, k), 3));
+  boxGeom.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, k), 3));
+  boxObj.visible = boxes.length > 0;
+}
+
+function rebuildRadar() {
+  const r = (S.showRadar && cache.radar) || { points: [] };
+  const n = r.points.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    pos.set(r.points[i], 3*i);
+    const v = r.speed_radial[i];                 // approaching = cyan, receding = orange, static = white
+    const c = v < -0.5 ? [0.25, 0.85, 1.0] : v > 0.5 ? [1.0, 0.55, 0.15] : [0.95, 0.95, 0.95];
+    col.set(c, 3*i);
+  }
+  radarGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  radarGeom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  radarObj.visible = n > 0;
+}
+
+function updateHud() {
+  const info = cache.info || {};
+  const ts = info.timestamp ? new Date(info.timestamp / 1000).toISOString().replace('T', ' ').slice(0, 23) : '';
+  const speed = info.speed_mps != null ? `${info.speed_mps.toFixed(1)} m/s (${(info.speed_mps*3.6).toFixed(0)} km/h)` : 'n/a';
+  const fusion = S.modality === 'none' ? '-' : S.modality;
+  const line = (k, v, a) => `<span class="k">${k.padEnd(9)}</span><span class="${a ? 'a' : 'v'}">${v}</span>`;
+  $('hud').innerHTML = [
+    line('scene', `${info.scene_name || ''}  [${S.i + 1}/${S.samples.length}]`, true),
+    line('time', ts),
+    line('ego', speed),
+    line('colour', `${S.colorMode} · ${S.cmap}`),
+    line('fusion', fusion, S.modality !== 'none'),
+    line('points', `${S.shown || 0} / ${S.total || 0}  (< ${S.maxRange} m, size ${S.pointSize})`),
+    line('layers', `boxes ${S.showBoxes ? 'on' : 'off'} (${(cache.boxes||[]).length}) · radar ${S.showRadar ? 'on' : 'off'} (${((cache.radar||{}).points||[]).length})`),
+    line('keys', 'H for help', false),
+  ].join('\n');
+}
+
+function updateCam() {
+  const panel = $('campanel');
+  if (!S.showCam) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const ch = S.modality === 'none' ? 'NARROW' : S.modality;
+  const overlay = S.modality === 'none' ? 1 : 0;      // fused colours already come from the image
+  const q = `overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}`;
+  $('camname').textContent = ch + (overlay ? ' + LiDAR' : '');
+  $('camimg').src = `/api/sample/${token()}/image/${ch}?${q}`;
+}
+
+// ------------------------------------------------------------------ navigation
+async function loadScene(tok, i = 0) {
+  const d = await getJSON(`/api/scene/${tok}`);
+  S.scene = tok; S.samples = d.samples; S.timestamps = d.timestamps;
+  S.i = Math.max(0, Math.min(i, S.samples.length - 1));
+  $('slider').max = S.samples.length - 1; $('scene').value = tok;
+  cache = { token: null, pts: null, colors: null, colorsKey: null };
+  await loadSample();
+}
+function step(n) { S.i = (S.i + n + S.samples.length) % S.samples.length; loadSample(); }
+function stepScene(n) {
+  const idx = S.scenes.findIndex(s => s.token === S.scene);
+  const nxt = S.scenes[(idx + n + S.scenes.length) % S.scenes.length];
+  loadScene(nxt.token, 0);
+}
+let playTimer = null;
+function togglePlay(force) {
+  S.playing = force != null ? force : !S.playing;
+  $('btnplay').textContent = S.playing ? '❚❚' : '▶';
+  clearInterval(playTimer);
+  if (S.playing) playTimer = setInterval(() => step(1), 200);
+}
+function writeHash() {
+  const sc = S.scenes.find(s => s.token === S.scene);
+  if (!sc) return;
+  history.replaceState(null, '', `#scene=${encodeURIComponent(sc.name)}&i=${S.i}&mode=${S.colorMode}&cmap=${S.cmap}&fusion=${S.modality}`);
+}
+function readHash() {
+  const h = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+  if (h.mode && S.cfg.color_modes.includes(h.mode)) S.colorMode = h.mode;
+  if (h.cmap && S.cfg.colormaps.includes(h.cmap)) S.cmap = h.cmap;
+  if (h.fusion && S.cfg.modalities.includes(h.fusion)) S.modality = h.fusion;
+  return h;
+}
+
+// ------------------------------------------------------------------ keys
+const cycle = (list, cur, n) => list[(list.indexOf(cur) + n + list.length) % list.length];
+function onKey(e) {
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+  const k = e.key, sh = e.shiftKey;
+  let handled = true;
+  switch (k) {
+    case 'n': case 'N': case 'ArrowRight': step(sh ? 10 : 1); break;
+    case 'p': case 'P': case 'ArrowLeft': step(sh ? -10 : -1); break;
+    case ' ': togglePlay(); break;
+    case ',': stepScene(-1); break;
+    case '.': stepScene(1); break;
+    case 'm': S.modality = cycle(S.cfg.modalities, S.modality, 1); toast('fusion: ' + S.modality); loadSample(); break;
+    case 'M': S.modality = cycle(S.cfg.modalities, S.modality, -1); toast('fusion: ' + S.modality); loadSample(); break;
+    case 'i': case 'I': S.colorMode = cycle(S.cfg.color_modes, S.colorMode, sh ? -1 : 1); toast('colour: ' + S.colorMode); loadSample(); break;
+    case 'c': case 'C': S.cmap = cycle(S.cfg.colormaps, S.cmap, sh ? -1 : 1); toast('colormap: ' + S.cmap); loadSample(); break;
+    case 'b': case 'B': S.showBoxes = !S.showBoxes; cache.boxes = null; loadSample(); break;
+    case 'r': case 'R': S.showRadar = !S.showRadar; cache.radar = null; loadSample(); break;
+    case 'v': case 'V': S.showCam = !S.showCam; updateCam(); break;
+    case 'g': case 'G': S.showGrid = !S.showGrid; grid.visible = axes.visible = S.showGrid; break;
+    case '+': case '=': S.pointSize = Math.min(12, S.pointSize + 1); ptsMat.size = S.pointSize; updateHud(); break;
+    case '-': case '_': S.pointSize = Math.max(1, S.pointSize - 1); ptsMat.size = S.pointSize; updateHud(); break;
+    case '[': S.maxRange = Math.max(10, S.maxRange - 10); loadSample(); break;
+    case ']': S.maxRange = Math.min(300, S.maxRange + 10); loadSample(); break;
+    case 't': case 'T': topView(); break;
+    case 'z': case 'Z': case 'Home': resetView(); break;
+    case 'h': case 'H': case '?': $('help').classList.toggle('show'); break;
+    case 'Escape': $('help').classList.remove('show'); break;
+    default:
+      if (/^[0-6]$/.test(k)) { S.modality = S.cfg.modalities[+k]; toast('fusion: ' + S.modality); loadSample(); }
+      else handled = false;
+  }
+  if (handled) e.preventDefault();
+}
+window.addEventListener('keydown', onKey);
+// Forward keys to the page when the camera panel or a button has focus.
+document.body.tabIndex = -1;
+
+// ------------------------------------------------------------------ boot
+(async () => {
+  S.cfg = await getJSON('/api/config');
+  $('help').textContent = S.cfg.keymap.trim() + '\n\n  fusion colours: pixels of the chosen camera; grey = outside its view';
+  S.scenes = await getJSON('/api/scenes');
+  const sel = $('scene');
+  for (const s of S.scenes) {
+    const o = document.createElement('option'); o.value = s.token;
+    o.textContent = `${s.name} · ${s.split} · ${s.nbr_samples}${s.valid_ego_pose ? '' : ' · no ego pose'}`;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => loadScene(sel.value, 0));
+  $('slider').addEventListener('input', () => { S.i = +$('slider').value; loadSample(); });
+  $('btnplay').addEventListener('click', () => togglePlay());
+  $('btnhelp').addEventListener('click', () => $('help').classList.toggle('show'));
+  const h = readHash();
+  const start = S.scenes.find(s => s.name === h.scene) || S.scenes[0];
+  await loadScene(start.token, +(h.i || 0));
+})();
+})();
+</script>
+</body>
+</html>
