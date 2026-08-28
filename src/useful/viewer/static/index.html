@@ -162,6 +162,23 @@ async function loadSample() {
   if (radar) cache.radar = radar;
   camList.forEach((ch, k) => { if (b2d[k]) cache.b2d[ch] = b2d[k]; });
   rebuildCloud(); rebuildBoxes(); rebuildRadar(); updateHud(); updateCams();
+  prefetch(S.i + 1);
+}
+
+// Warm the browser cache with the next sample (cold frames cost the server ~150 ms per PNG decode).
+let prefetchTimer = null;
+function prefetch(i) {
+  clearTimeout(prefetchTimer);
+  const tok = S.samples[i]; if (!tok) return;
+  prefetchTimer = setTimeout(() => {
+    const px = Math.round(parseInt(getComputedStyle($('cams')).getPropertyValue('--camw')) * Math.min(window.devicePixelRatio || 1, 2));
+    const urls = [`/api/sample/${tok}/points`, `/api/sample/${tok}/colors?${colorQuery()}`, `/api/sample/${tok}/boxes`];
+    if (S.camsVisible) for (const ch of S.cams) {
+      const overlay = S.lidarOverlay && S.modality !== ch ? 1 : 0;
+      urls.push(`/api/sample/${tok}/image/${ch}?overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}&w=${px}`);
+    }
+    for (const u of urls) fetch(u, { priority: 'low' }).catch(() => {});
+  }, 120);
 }
 
 function rebuildCloud() {
@@ -287,6 +304,7 @@ function layoutCams() {
 function updateCams() {
   const root = $('cams');
   const want = S.camsVisible ? CAMS.filter(c => S.cams.has(c)) : [];
+  layoutCams();                                   // --camw must be current before requesting images
   for (const el of [...root.children]) if (!want.includes(el.dataset.ch)) el.remove();
   for (const ch of want) {
     let el = root.querySelector(`[data-ch="${ch}"]`);
@@ -298,7 +316,9 @@ function updateCams() {
     }
     const overlay = S.lidarOverlay && S.modality !== ch ? 1 : 0;   // fused points already carry this image
     el.querySelector('.cap span').textContent = (overlay ? 'LiDAR ' : '') + (S.boxes2d ? '2D boxes' : '');
-    const src = `/api/sample/${token()}/image/${ch}?overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}`;
+    // request the image at the panel's device-pixel width: the server resizes before drawing the overlay
+    const px = Math.round(parseInt(getComputedStyle(root).getPropertyValue('--camw')) * Math.min(window.devicePixelRatio || 1, 2));
+    const src = `/api/sample/${token()}/image/${ch}?overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}&w=${px}`;
     const img = el.querySelector('img');
     if (img.getAttribute('src') !== src) img.src = src; else drawBoxes2D(el);
   }

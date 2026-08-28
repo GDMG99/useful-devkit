@@ -115,7 +115,10 @@ def create_app(browser: SceneBrowser) -> Flask:
 
     @app.route('/api/sample/<token>/image/<channel>')
     def image(token, channel):
-        data = browser.image(_sample(token), channel)
+        # Resize to the panel's pixel width *before* projecting / drawing, so the
+        # overlay is rasterized once at display resolution (faster, no resampling).
+        width = int(min(max(_float('w', 800), 160), 2100))
+        data = browser.image_resized(_sample(token), channel, width)
         if data is None:
             abort(404, f'no {channel} image for this sample')
         img, K, T, dist, scale = data
@@ -123,10 +126,10 @@ def create_app(browser: SceneBrowser) -> Flask:
             pts, _ = browser.cloud(token)
             rgb = browser.colors(token, request.args.get('mode', 'distance'),
                                  request.args.get('cmap', 'jet'), 'none', _float('max_range', None))
-            radius = 1 if img.shape[1] < 700 else 2
+            radius = 0 if img.shape[1] < 500 else 1
             img = overlay_points(img, pts, rgb, K, T, dist, scale, radius=radius,
                                  max_range=_float('max_range', None))
-        return Response(encode_jpeg(img), mimetype='image/jpeg',
+        return Response(encode_jpeg(img, max_width=width), mimetype='image/jpeg',
                         headers={'Cache-Control': 'max-age=3600'})
 
     return app

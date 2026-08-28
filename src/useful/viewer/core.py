@@ -168,6 +168,20 @@ class SceneBrowser:
             out.append({'name': name, 'label': label, 'color': [int(r), int(g), int(b)]})
         return out
 
+    @functools.lru_cache(maxsize=128)
+    def image_resized(self, sample_token, channel, width):
+        """Like :meth:`image` but downscaled to ``width`` px (INTER_AREA); ``scale`` is
+        adjusted so projections land on the small image directly."""
+        data = self.image(sample_token, channel)
+        if data is None:
+            return None
+        img, K, T, dist, scale = data
+        if width and img.shape[1] > width:
+            f = width / img.shape[1]
+            img = cv2.resize(img, (int(width), max(1, int(round(img.shape[0] * f)))), interpolation=cv2.INTER_AREA)
+            scale = scale * f
+        return img, K, T, dist, scale
+
     def boxes_2d(self, sample_token, channel):
         """2D boxes of one camera image, in the calibrated pixel frame of that image."""
         s = self.db.get('sample', sample_token)
@@ -297,21 +311,29 @@ def project(points, K, T, dist=None, scale=1.0):
     return pix[:, 0] * scale, pix[:, 1] * scale, z
 
 
-def overlay_points(img, points, colors, K, T, dist, scale, radius=2, max_range=None):
-    """Draw projected points on a copy of the image (BGR)."""
+def overlay_points(img, points, colors, K, T, dist, scale, radius=1, max_range=None):
+    """Draw projected points on a copy of the image (BGR), vectorized.
+
+    Points are painted far-to-near so closer returns overwrite farther ones, and a
+    (2*radius+1)^2 block is stamped per point with fancy indexing instead of one
+    cv2.circle call each (~40k calls per frame otherwise).
+    """
     canvas = img.copy()
     u, v, z = project(points, K, T, dist, scale)
     h, w = canvas.shape[:2]
     ok = (z > 0.5) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
     if max_range:
         ok &= np.linalg.norm(points, axis=1) < max_range
-    ui, vi = u[ok].astype(np.int32), v[ok].astype(np.int32)
-    col = colors[ok]
-    if radius <= 1:
-        canvas[vi, ui] = col[:, ::-1]
-    else:
-        for x, y, c in zip(ui, vi, col):
-            cv2.circle(canvas, (int(x), int(y)), radius, (int(c[2]), int(c[1]), int(c[0])), -1)
+    idx = np.where(ok)[0]
+    idx = idx[np.argsort(-z[idx])]                     # far first, near last
+    ui, vi = u[idx].astype(np.int32), v[idx].astype(np.int32)
+    bgr = colors[idx][:, ::-1]
+    r = int(max(0, radius))
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            yy, xx = vi + dy, ui + dx
+            m = (yy >= 0) & (yy < h) & (xx >= 0) & (xx < w)
+            canvas[yy[m], xx[m]] = bgr[m]
     return canvas
 
 
