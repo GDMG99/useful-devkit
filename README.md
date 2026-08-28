@@ -159,16 +159,21 @@ ssh -N -L 8080:localhost:8080 <user>@<server>
 |---|---|
 | `N` / `P` (`→` / `←`) | next / previous sample (`Shift` = ±10) · `Space` play/pause |
 | `,` / `.` | previous / next scene |
-| `M` (`Shift+M`) | cycle camera fusion modality (reverse) — `0`–`6` select directly |
+| `M` (`Shift+M`) · `0` | cycle camera **fusion** modality (reverse) · none |
+| `1`–`6` · `V` | toggle camera panels WIDE_LEFT / NARROW / WIDE_RIGHT / LWIR / POLARIMETRIC / SWIR (any number at once) · show/hide all |
+| `L` / `D` | toggle LiDAR overlay / 2D boxes in the camera panels |
 | `I` | cycle colour source: distance / intensity / height |
 | `C` | cycle colormap: jet / turbo / viridis / plasma / gray |
-| `B` / `R` / `V` / `G` | toggle 3D boxes / radar / camera panel / grid |
+| `F` (`Shift+F`) | class filter panel (reset) — applies to 3D boxes, 2D boxes and the instance list |
+| `X` / `Shift+X` · `J` · `Esc` | follow next / previous instance (white outline, camera tracks it) · jump to its next frame · stop |
+| `B` / `R` / `G` | toggle 3D boxes / radar / grid |
 | `+` / `-` · `[` / `]` | point size · max range ∓10 m |
 | `T` / `Z` | top-down view / reset view · `H` help |
 
 The same shortcuts drive an Open3D desktop version for machines with a display:
-`python -m useful.viewer.desktop --scene dia_19`. The URL hash keeps scene,
-sample and colour state, so a view can be shared as a link.
+`python -m useful.viewer.desktop --scene dia_19` (there `0`–`6` select the fusion
+modality). The URL hash keeps scene, sample, colours, open cameras, hidden
+classes and the followed instance, so a view can be shared as a link.
 
 ## Acknowledgements
 

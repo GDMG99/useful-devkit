@@ -15,7 +15,7 @@ import matplotlib
 
 from ..useful import USEFUL
 from ..utils.data_classes import (LidarPointCloud, RadarPointCloud, RGBImage,
-                                  ThermalImage, SWIRImage, PolarimetricImage, PointCloud)
+                                  ThermalImage, SWIRImage, PolarimetricImage, PointCloud, Box)
 
 COLORMAPS = ['jet', 'turbo', 'viridis', 'plasma', 'gray']
 COLOR_MODES = ['distance', 'intensity', 'height']
@@ -31,13 +31,19 @@ KEYMAP = """
   N / P  (-> / <-)   next / previous sample        Shift: +-10
   Space              play / pause
   , / .              previous / next scene
-  M  (Shift+M)       cycle camera fusion modality (reverse)
-  0..6               fusion: 0 none, 1 WIDE_LEFT, 2 NARROW, 3 WIDE_RIGHT,
-                             4 LWIR, 5 POLARIMETRIC, 6 SWIR
+  M  (Shift+M)       cycle camera fusion modality (reverse), 0 = none
+  1..6               toggle camera panels: 1 WIDE_LEFT, 2 NARROW, 3 WIDE_RIGHT,
+                             4 LWIR, 5 POLARIMETRIC, 6 SWIR   (desktop: select fusion)
+  V                  show / hide all camera panels
+  L                  toggle LiDAR overlay in the camera panels
+  D                  toggle 2D boxes in the camera panels
   I                  cycle colour source: distance / intensity / height
   C                  cycle colormap: jet / turbo / viridis / plasma / gray
   B                  toggle 3D boxes            R   toggle radar
-  V                  toggle camera panel        G   toggle grid / axes
+  F                  class filter panel         Shift+F  show all classes
+  X / Shift+X        follow next / previous instance   Esc  stop following
+  J                  jump to the next sample where the followed instance appears
+  G                  toggle grid / axes
   + / -              point size                 [ / ]  max range -/+ 10 m
   T                  top-down view              Z   reset view
   H / ?              this help
@@ -153,6 +159,64 @@ class SceneBrowser:
         scale = img.shape[1] / calib_w if calib_w else 1.0
         return img, np.asarray(K, dtype=np.float64), np.asarray(T, dtype=np.float64), \
             (np.asarray(dist, dtype=np.float64) if dist is not None and len(dist) else None), scale
+
+    def categories(self):
+        """Category names with the devkit's box colour (RGB)."""
+        out = []
+        for name, label in self.db.get_categories().items():
+            b, g, r = Box.get_box_color(label)
+            out.append({'name': name, 'label': label, 'color': [int(r), int(g), int(b)]})
+        return out
+
+    def boxes_2d(self, sample_token, channel):
+        """2D boxes of one camera image, in the calibrated pixel frame of that image."""
+        s = self.db.get('sample', sample_token)
+        if channel not in s['data']:
+            return None
+        sd = self.db.get('sample_data', s['data'][channel])
+        out = []
+        for box in self.db.get_boxes_2d(sd['token']):
+            b, g, r = box.color
+            out.append({'token': box.token, 'instance': box.instance_token, 'name': box.name,
+                        'label': box.label, 'color': [int(r), int(g), int(b)],
+                        'bbox': [float(v) for v in box.bbox], 'visibility': box.visibility})
+        # RGB sample_data records carry width/height = 0; fall back to the decoded image size.
+        w, h = sd.get('width') or 0, sd.get('height') or 0
+        if not w or not h:
+            data = self.image(sample_token, channel)
+            if data is not None:
+                h, w = data[0].shape[:2]
+        return {'channel': channel, 'width': int(w), 'height': int(h), 'boxes': out}
+
+    @functools.lru_cache(maxsize=16)
+    def instances(self, scene_token):
+        """Instances annotated in a scene: category, and the sample indices where they appear."""
+        toks = self.sample_tokens(scene_token)
+        found = {}
+        for idx, tok in enumerate(toks):
+            s = self.db.get('sample', tok)
+            for ann_tok in s.get('anns', []):
+                ann = self.db.get('sample_annotation', ann_tok)
+                rec = found.setdefault(ann['instance_token'],
+                                       {'token': ann['instance_token'], 'name': ann['category_name'],
+                                        'samples_3d': [], 'samples_2d': []})
+                rec['samples_3d'].append(idx)
+            for ch, sd_tok in s['data'].items():
+                sd = self.db.get('sample_data', sd_tok)
+                for ann_tok in sd.get('anns_2d', []):
+                    ann = self.db.get('sample_annotation_2d', ann_tok)
+                    rec = found.setdefault(ann['instance_token'],
+                                           {'token': ann['instance_token'], 'name': ann['category_name'],
+                                            'samples_3d': [], 'samples_2d': []})
+                    if not rec['samples_2d'] or rec['samples_2d'][-1] != idx:
+                        rec['samples_2d'].append(idx)
+        out = []
+        for rec in found.values():
+            allidx = sorted(set(rec['samples_3d']) | set(rec['samples_2d']))
+            rec['first'], rec['last'], rec['count'] = allidx[0], allidx[-1], len(allidx)
+            out.append(rec)
+        out.sort(key=lambda r: (r['name'], r['first']))
+        return out
 
     def boxes(self, sample_token):
         out = []

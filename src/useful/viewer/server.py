@@ -86,9 +86,28 @@ def create_app(browser: SceneBrowser) -> Flask:
                         mimetype='application/octet-stream',
                         headers={'X-Num-Points': str(len(rgb)), 'Cache-Control': 'max-age=3600'})
 
+    @app.route('/api/categories')
+    def categories():
+        return jsonify(browser.categories())
+
+    @app.route('/api/scene/<token>/instances')
+    def instances(token):
+        try:
+            browser.db.get('scene', token)
+        except KeyError:
+            abort(404)
+        return jsonify(browser.instances(token))
+
     @app.route('/api/sample/<token>/boxes')
     def boxes(token):
         return jsonify(browser.boxes(_sample(token)))
+
+    @app.route('/api/sample/<token>/boxes2d/<channel>')
+    def boxes_2d(token, channel):
+        data = browser.boxes_2d(_sample(token), channel)
+        if data is None:
+            abort(404, f'no {channel} in this sample')
+        return jsonify(data)
 
     @app.route('/api/sample/<token>/radar')
     def radar(token):

@@ -15,21 +15,32 @@
   #hud .k { color:var(--dim); }
   #hud .v { color:var(--fg); }
   #hud .a { color:var(--accent); font-weight:600; }
-  #controls { top:12px; right:12px; display:flex; gap:8px; align-items:center; }
+  #controls { top:12px; right:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:640px; justify-content:flex-end; }
   select, button { background:#1a2028; color:var(--fg); border:1px solid #2f3944; border-radius:4px;
-    padding:4px 8px; font:inherit; }
+    padding:4px 8px; font:inherit; max-width:260px; }
   button:hover, select:hover { border-color: var(--accent); }
+  button.on { border-color: var(--accent); color: var(--accent); }
   #timeline { left:12px; right:12px; bottom:12px; display:flex; gap:12px; align-items:center; }
   #timeline input[type=range] { flex:1; accent-color: var(--accent); }
   #timeline .idx { min-width:90px; text-align:right; color:var(--dim); }
-  #campanel { right:12px; bottom:56px; width:420px; padding:6px; }
-  #campanel img { display:block; width:100%; height:auto; border-radius:3px; background:#000; min-height:60px; }
-  #campanel .cap { color:var(--dim); font-size:11.5px; padding:4px 2px 0; display:flex; justify-content:space-between; }
-  #help { top:50%; left:50%; transform:translate(-50%,-50%); white-space:pre; display:none; max-height:90vh; overflow:auto; }
+  /* camera panels: a column on the right, two columns when there are many */
+  #cams { position:fixed; right:12px; bottom:56px; top:64px; display:flex; flex-direction:column; flex-wrap:wrap-reverse;
+    justify-content:flex-end; align-content:flex-end; gap:8px; pointer-events:none; }
+  .cam { position:relative; width:var(--camw, 380px); background:var(--panel); border:1px solid #2a323c; border-radius:6px;
+    padding:5px; pointer-events:auto; }
+  .cam img { display:block; width:100%; height:auto; border-radius:3px; background:#000; min-height:40px; }
+  .cam canvas { position:absolute; left:5px; top:5px; pointer-events:none; }
+  .cam .cap { color:var(--dim); font-size:11px; padding:3px 2px 0; display:flex; justify-content:space-between; }
+  .cam .cap b { color:var(--fg); font-weight:600; }
+  #filter { top:64px; right:12px; display:none; max-height:70vh; overflow:auto; z-index:5; }
+  #filter.show { display:block; }
+  #filter label { display:flex; gap:8px; align-items:center; padding:2px 0; cursor:pointer; }
+  #filter .sw { width:12px; height:12px; border-radius:2px; display:inline-block; }
+  #filter .row { display:flex; gap:8px; margin-bottom:6px; }
+  #help { top:50%; left:50%; transform:translate(-50%,-50%); white-space:pre; display:none; max-height:90vh; overflow:auto; z-index:6; }
   #help.show { display:block; }
-  #toast { left:50%; top:12px; transform:translateX(-50%); display:none; color:var(--accent); }
+  #toast { left:50%; top:12px; transform:translateX(-50%); display:none; color:var(--accent); z-index:7; }
   .hidden { display:none !important; }
-  kbd { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -37,12 +48,15 @@
 <div id="hud" class="panel">loading…</div>
 <div id="controls" class="panel">
   <label>scene <select id="scene"></select></label>
+  <label>follow <select id="follow"><option value="">—</option></select></label>
+  <button id="btnfilter" title="F">classes</button>
   <button id="btnhelp" title="H">? keys</button>
 </div>
-<div id="campanel" class="panel">
-  <img id="camimg" alt="camera">
-  <div class="cap"><span id="camname">camera</span><span>V hides · M/0-6 changes</span></div>
+<div id="filter" class="panel">
+  <div class="row"><button id="fall">all</button><button id="fnone">none</button><span style="color:var(--dim);align-self:center">Shift+F resets</span></div>
+  <div id="classes"></div>
 </div>
+<div id="cams"></div>
 <div id="timeline" class="panel">
   <button id="btnplay" title="Space">▶</button>
   <input id="slider" type="range" min="0" max="0" value="0">
@@ -56,14 +70,18 @@
 <script>
 (() => {
 'use strict';
+const CAMS = ['WIDE_LEFT', 'NARROW', 'WIDE_RIGHT', 'LWIR', 'POLARIMETRIC', 'SWIR'];
 // ------------------------------------------------------------------ state
 const S = {
-  scenes: [], scene: null, samples: [], timestamps: [], i: 0,
+  scenes: [], scene: null, samples: [], i: 0, cfg: null, categories: [],
   colorMode: 'distance', cmap: 'jet', modality: 'none',
-  pointSize: 2.0, maxRange: 100, showBoxes: true, showRadar: true, showCam: true, showGrid: true,
-  playing: false, cfg: null,
+  pointSize: 2.0, maxRange: 100, showBoxes: true, showRadar: true, showGrid: true,
+  cams: new Set(['NARROW']), camsVisible: true, lidarOverlay: true, boxes2d: true,
+  hidden: new Set(),                 // hidden category names
+  instances: [], follow: null,       // instance list of the scene / followed instance token
+  playing: false,
 };
-let cache = { token: null, pts: null, inten: null, colors: null, colorsKey: null };
+let cache = { token: null, pts: null, colors: null, colorsKey: null, boxes: null, radar: null, info: null, b2d: {} };
 let reqId = 0;
 
 // ------------------------------------------------------------------ three.js
@@ -75,8 +93,7 @@ scene3.background = new THREE.Color(0x0f1216);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
 camera.up.set(0, 0, 1);
 const controls = new THREE.OrbitControls(camera, canvas);
-controls.enableDamping = true; controls.dampingFactor = 0.08;
-controls.screenSpacePanning = false;
+controls.enableDamping = true; controls.dampingFactor = 0.08; controls.screenSpacePanning = false;
 function resetView() { camera.position.set(-28, 0, 16); controls.target.set(25, 0, 0); controls.update(); }
 function topView() { camera.position.set(40, 0, 140); controls.target.set(40, 0, 0); controls.update(); }
 resetView();
@@ -88,17 +105,20 @@ const axes = new THREE.AxesHelper(3); scene3.add(axes);
 const ptsGeom = new THREE.BufferGeometry();
 const ptsMat = new THREE.PointsMaterial({ size: S.pointSize, vertexColors: true, sizeAttenuation: false });
 const ptsObj = new THREE.Points(ptsGeom, ptsMat); ptsObj.frustumCulled = false; scene3.add(ptsObj);
-
 const boxGeom = new THREE.BufferGeometry();
 const boxObj = new THREE.LineSegments(boxGeom, new THREE.LineBasicMaterial({ vertexColors: true })); scene3.add(boxObj);
+const followGeom = new THREE.BufferGeometry();
+const followObj = new THREE.LineSegments(followGeom, new THREE.LineBasicMaterial({ color: 0xffffff })); scene3.add(followObj);
 const radarGeom = new THREE.BufferGeometry();
 const radarObj = new THREE.Points(radarGeom, new THREE.PointsMaterial({ size: 7, vertexColors: true, sizeAttenuation: false })); scene3.add(radarObj);
+let labelSprite = null;
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  layoutCams();
 }
-window.addEventListener('resize', resize); resize();
+window.addEventListener('resize', resize);
 (function loop() { controls.update(); renderer.render(scene3, camera); requestAnimationFrame(loop); })();
 
 // ------------------------------------------------------------------ helpers
@@ -106,11 +126,12 @@ const $ = id => document.getElementById(id);
 const toast = (msg, ms = 1400) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block';
   clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); };
 const token = () => S.samples[S.i];
+const short = t => (t || '').slice(0, 6);
 async function getJSON(u) { const r = await fetch(u); if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }
 async function getBuf(u) { const r = await fetch(u); if (!r.ok) throw new Error(u + ' ' + r.status); return r.arrayBuffer(); }
-function colorQuery() {
-  return `mode=${S.colorMode}&cmap=${S.cmap}&modality=${S.modality}&max_range=${S.maxRange}`;
-}
+const colorQuery = () => `mode=${S.colorMode}&cmap=${S.cmap}&modality=${S.modality}&max_range=${S.maxRange}`;
+const visible = name => !S.hidden.has(name);
+const followed = inst => S.follow && inst === S.follow;
 
 // ------------------------------------------------------------------ loading
 async function loadSample() {
@@ -120,22 +141,27 @@ async function loadSample() {
   writeHash();
   const needPts = cache.token !== tok;
   const ckey = tok + '|' + colorQuery();
+  const camList = S.camsVisible ? [...S.cams] : [];
   const jobs = [
     needPts ? getBuf(`/api/sample/${tok}/points`) : null,
     cache.colorsKey !== ckey ? getBuf(`/api/sample/${tok}/colors?${colorQuery()}`) : null,
     needPts ? getJSON(`/api/sample/${tok}/info`) : null,
-    needPts && S.showBoxes ? getJSON(`/api/sample/${tok}/boxes`) : null,
-    needPts && S.showRadar ? getJSON(`/api/sample/${tok}/radar`) : null,
+    needPts || !cache.boxes ? getJSON(`/api/sample/${tok}/boxes`) : null,
+    needPts || !cache.radar ? getJSON(`/api/sample/${tok}/radar`) : null,
+    Promise.all(camList.map(ch => (needPts || !cache.b2d[ch])
+      ? getJSON(`/api/sample/${tok}/boxes2d/${ch}`).catch(() => null) : cache.b2d[ch])),
   ];
   let res;
   try { res = await Promise.all(jobs); } catch (e) { toast('load failed: ' + e.message, 3000); return; }
-  if (my !== reqId) return;                      // a newer request superseded this one
-  const [pbuf, cbuf, info, boxes, radar] = res;
-  if (pbuf) { cache.pts = new Float32Array(pbuf); cache.token = tok; cache.info = info; cache.boxes = boxes; cache.radar = radar; }
+  if (my !== reqId) return;                      // superseded by a newer request
+  const [pbuf, cbuf, info, boxes, radar, b2d] = res;
+  if (needPts) cache = { ...cache, b2d: {} };
+  if (pbuf) { cache.pts = new Float32Array(pbuf); cache.token = tok; cache.info = info; }
   if (cbuf) { cache.colors = new Uint8Array(cbuf); cache.colorsKey = ckey; }
   if (boxes) cache.boxes = boxes;
   if (radar) cache.radar = radar;
-  rebuildCloud(); rebuildBoxes(); rebuildRadar(); updateHud(); updateCam();
+  camList.forEach((ch, k) => { if (b2d[k]) cache.b2d[ch] = b2d[k]; });
+  rebuildCloud(); rebuildBoxes(); rebuildRadar(); updateHud(); updateCams();
 }
 
 function rebuildCloud() {
@@ -157,21 +183,60 @@ function rebuildCloud() {
 }
 
 const EDGES = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+function boxSegments(b) {
+  const cr = b.corners, segs = EDGES.map(e => [cr[e[0]], cr[e[1]]]);
+  const f = [0,1,2].map(a => (cr[0][a]+cr[1][a]+cr[4][a]+cr[5][a]) / 4);   // heading tick to the front face
+  segs.push([b.center, f]);
+  return segs;
+}
 function rebuildBoxes() {
-  const boxes = (S.showBoxes && cache.boxes) || [];
-  const pos = new Float32Array(boxes.length * 24 * 3 + boxes.length * 6), col = new Float32Array(pos.length);
+  const all = (S.showBoxes && cache.boxes) || [];
+  const boxes = all.filter(b => visible(b.name));
+  const pos = new Float32Array(boxes.length * 13 * 6), col = new Float32Array(pos.length);
   let k = 0;
   for (const b of boxes) {
-    const cr = b.corners, c = b.color.map(v => v / 255);
-    const segs = EDGES.map(e => [cr[e[0]], cr[e[1]]]);
-    // heading tick: centre -> middle of the front face (corners 0,1,4,5)
-    const f = [0,1,2].map(a => (cr[0][a]+cr[1][a]+cr[4][a]+cr[5][a]) / 4);
-    segs.push([b.center, f]);
-    for (const [a, bb] of segs) { for (const q of [a, bb]) { pos.set(q, k); col.set(c, k); k += 3; } }
+    const c = b.color.map(v => v / 255);
+    for (const [a, bb] of boxSegments(b)) for (const q of [a, bb]) { pos.set(q, k); col.set(c, k); k += 3; }
   }
   boxGeom.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, k), 3));
   boxGeom.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, k), 3));
   boxObj.visible = boxes.length > 0;
+  updateFollow3D(all);
+}
+
+function updateFollow3D(all) {
+  const b = S.follow ? all.find(x => x.instance === S.follow) : null;
+  S.followBox = b || null;
+  if (labelSprite) { scene3.remove(labelSprite); labelSprite = null; }
+  if (!b) { followObj.visible = false; return; }
+  // white outline drawn slightly inflated so it reads on top of the class colour
+  const cx = b.center, segs = boxSegments(b);
+  const pos = new Float32Array(segs.length * 6); let k = 0;
+  for (const [a, bb] of segs) for (const q of [a, bb]) {
+    pos[k] = cx[0] + (q[0]-cx[0]) * 1.04; pos[k+1] = cx[1] + (q[1]-cx[1]) * 1.04; pos[k+2] = cx[2] + (q[2]-cx[2]) * 1.04; k += 3;
+  }
+  followGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  followObj.visible = true;
+  labelSprite = makeLabel(`${b.name} · ${short(b.instance)} · ${Math.hypot(...b.center).toFixed(1)} m`);
+  labelSprite.position.set(cx[0], cx[1], cx[2] + b.size[2] / 2 + 1.2);
+  scene3.add(labelSprite);
+  // keep the camera's offset and slide the orbit target onto the box
+  const t = new THREE.Vector3(cx[0], cx[1], cx[2]);
+  const d = t.clone().sub(controls.target);
+  camera.position.add(d); controls.target.copy(t); controls.update();
+}
+
+function makeLabel(text) {
+  const c = document.createElement('canvas'); const ctx = c.getContext('2d');
+  ctx.font = '600 28px JetBrains Mono, monospace';
+  const w = Math.ceil(ctx.measureText(text).width) + 24; c.width = w; c.height = 44;
+  ctx.font = '600 28px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(16,19,24,.85)'; ctx.fillRect(0, 0, w, 44);
+  ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.fillText(text, 12, 22);
+  const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: false }));
+  sp.scale.set(w / 2600, 44 / 2600, 1);    // sizeAttenuation=false: scale is a fraction of the viewport
+  return sp;
 }
 
 function rebuildRadar() {
@@ -180,8 +245,7 @@ function rebuildRadar() {
   for (let i = 0; i < n; i++) {
     pos.set(r.points[i], 3*i);
     const v = r.speed_radial[i];                 // approaching = cyan, receding = orange, static = white
-    const c = v < -0.5 ? [0.25, 0.85, 1.0] : v > 0.5 ? [1.0, 0.55, 0.15] : [0.95, 0.95, 0.95];
-    col.set(c, 3*i);
+    col.set(v < -0.5 ? [0.25, 0.85, 1.0] : v > 0.5 ? [1.0, 0.55, 0.15] : [0.95, 0.95, 0.95], 3*i);
   }
   radarGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   radarGeom.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -193,6 +257,9 @@ function updateHud() {
   const ts = info.timestamp ? new Date(info.timestamp / 1000).toISOString().replace('T', ' ').slice(0, 23) : '';
   const speed = info.speed_mps != null ? `${info.speed_mps.toFixed(1)} m/s (${(info.speed_mps*3.6).toFixed(0)} km/h)` : 'n/a';
   const fusion = S.modality === 'none' ? '-' : S.modality;
+  const nb = (cache.boxes || []).filter(b => visible(b.name)).length, nbAll = (cache.boxes || []).length;
+  const fi = S.follow ? S.instances.find(x => x.token === S.follow) : null;
+  const fb = S.followBox;
   const line = (k, v, a) => `<span class="k">${k.padEnd(9)}</span><span class="${a ? 'a' : 'v'}">${v}</span>`;
   $('hud').innerHTML = [
     line('scene', `${info.scene_name || ''}  [${S.i + 1}/${S.samples.length}]`, true),
@@ -201,36 +268,129 @@ function updateHud() {
     line('colour', `${S.colorMode} · ${S.cmap}`),
     line('fusion', fusion, S.modality !== 'none'),
     line('points', `${S.shown || 0} / ${S.total || 0}  (< ${S.maxRange} m, size ${S.pointSize})`),
-    line('layers', `boxes ${S.showBoxes ? 'on' : 'off'} (${(cache.boxes||[]).length}) · radar ${S.showRadar ? 'on' : 'off'} (${((cache.radar||{}).points||[]).length})`),
-    line('keys', 'H for help', false),
+    line('layers', `boxes ${S.showBoxes ? `${nb}/${nbAll}` : 'off'} · radar ${S.showRadar ? (cache.radar||{points:[]}).points.length : 'off'} · cams ${S.camsVisible ? [...S.cams].join(',') || '-' : 'off'}`),
+    line('filter', S.hidden.size ? `${S.hidden.size} class${S.hidden.size > 1 ? 'es' : ''} hidden: ${[...S.hidden].join(', ')}` : 'all classes', S.hidden.size > 0),
+    line('follow', fi ? `${fi.name} ${short(fi.token)}  frames ${fi.first + 1}-${fi.last + 1} (${fi.count})` +
+      (fb ? `  at ${fb.center[0].toFixed(1)}, ${fb.center[1].toFixed(1)} m` : '  (not in this frame, J jumps)') : '- (X / dropdown)', !!fi),
+    line('keys', 'H for help'),
   ].join('\n');
 }
 
-function updateCam() {
-  const panel = $('campanel');
-  if (!S.showCam) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
-  const ch = S.modality === 'none' ? 'NARROW' : S.modality;
-  const overlay = S.modality === 'none' ? 1 : 0;      // fused colours already come from the image
-  const q = `overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}`;
-  $('camname').textContent = ch + (overlay ? ' + LiDAR' : '');
-  $('camimg').src = `/api/sample/${token()}/image/${ch}?${q}`;
+// ------------------------------------------------------------------ camera panels
+function layoutCams() {
+  const n = S.camsVisible ? S.cams.size : 0;
+  const avail = window.innerHeight - 64 - 56 - 8;
+  // shrink panels until they stack in one column, else fall back to two columns
+  const w = n <= 1 ? 380 : n === 2 ? 360 : n === 3 ? Math.min(360, Math.floor((avail / 3 - 30) * 4 / 3)) : 320;
+  $('cams').style.setProperty('--camw', Math.max(220, w) + 'px');
+}
+function updateCams() {
+  const root = $('cams');
+  const want = S.camsVisible ? CAMS.filter(c => S.cams.has(c)) : [];
+  for (const el of [...root.children]) if (!want.includes(el.dataset.ch)) el.remove();
+  for (const ch of want) {
+    let el = root.querySelector(`[data-ch="${ch}"]`);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'cam'; el.dataset.ch = ch;
+      el.innerHTML = `<img alt="${ch}"><canvas></canvas><div class="cap"><b>${ch}</b><span></span></div>`;
+      el.querySelector('img').addEventListener('load', () => drawBoxes2D(el));
+      root.appendChild(el);
+    }
+    const overlay = S.lidarOverlay && S.modality !== ch ? 1 : 0;   // fused points already carry this image
+    el.querySelector('.cap span').textContent = (overlay ? 'LiDAR ' : '') + (S.boxes2d ? '2D boxes' : '');
+    const src = `/api/sample/${token()}/image/${ch}?overlay=${overlay}&mode=${S.colorMode}&cmap=${S.cmap}&max_range=${S.maxRange}`;
+    const img = el.querySelector('img');
+    if (img.getAttribute('src') !== src) img.src = src; else drawBoxes2D(el);
+  }
+  layoutCams();
+}
+function drawBoxes2D(el) {
+  const ch = el.dataset.ch, img = el.querySelector('img'), cv = el.querySelector('canvas');
+  const data = cache.b2d[ch];
+  const W = img.clientWidth, H = img.clientHeight;
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, W, H);
+  if (!S.boxes2d || !data || !data.boxes.length || !W) return;
+  const sx = W / (data.width || img.naturalWidth), sy = H / (data.height || img.naturalHeight);
+  ctx.font = '600 11px JetBrains Mono, monospace'; ctx.textBaseline = 'bottom';
+  for (const b of data.boxes) {
+    if (!visible(b.name)) continue;
+    const [x0, y0, x1, y1] = b.bbox; const isF = followed(b.instance);
+    ctx.lineWidth = isF ? 3 : 1.5;
+    ctx.strokeStyle = isF ? '#ffffff' : `rgb(${b.color.join(',')})`;
+    ctx.strokeRect(x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy);
+    if (isF || (x1 - x0) * sx > 40) {
+      const t = isF ? `${b.name} ${short(b.instance)}` : b.name.replace('vehicle.', '');
+      const tw = ctx.measureText(t).width + 6;
+      ctx.fillStyle = isF ? '#ffffff' : `rgb(${b.color.join(',')})`;
+      ctx.fillRect(x0 * sx, Math.max(0, y0 * sy - 13), tw, 13);
+      ctx.fillStyle = '#0f1216'; ctx.fillText(t, x0 * sx + 3, Math.max(13, y0 * sy));
+    }
+  }
+}
+function redrawCams() { for (const el of $('cams').children) drawBoxes2D(el); }
+
+// ------------------------------------------------------------------ class filter
+function buildFilter() {
+  const root = $('classes'); root.innerHTML = '';
+  for (const c of S.categories) {
+    const l = document.createElement('label');
+    l.innerHTML = `<input type="checkbox" ${visible(c.name) ? 'checked' : ''}><span class="sw" style="background:rgb(${c.color.join(',')})"></span>${c.name}`;
+    l.querySelector('input').addEventListener('change', e => { e.target.checked ? S.hidden.delete(c.name) : S.hidden.add(c.name); applyFilter(); });
+    root.appendChild(l);
+  }
+}
+function applyFilter() {
+  for (const inp of $('classes').querySelectorAll('input')) inp.checked = visible(inp.parentElement.textContent.trim());
+  rebuildBoxes(); redrawCams(); updateHud(); buildFollowList(); writeHash();
+}
+
+// ------------------------------------------------------------------ follow
+function buildFollowList() {
+  const sel = $('follow'); sel.innerHTML = '<option value="">—</option>';
+  for (const it of S.instances.filter(x => visible(x.name))) {
+    const o = document.createElement('option'); o.value = it.token;
+    o.textContent = `${it.name} ${short(it.token)} · ${it.first + 1}-${it.last + 1} (${it.count})`;
+    sel.appendChild(o);
+  }
+  sel.value = S.follow || '';
+}
+function setFollow(tok, announce = true) {
+  S.follow = tok || null; $('follow').value = S.follow || '';
+  const it = S.follow ? S.instances.find(x => x.token === S.follow) : null;
+  if (announce) toast(it ? `following ${it.name} ${short(it.token)}` : 'follow off');
+  rebuildBoxes(); redrawCams(); updateHud(); writeHash();
+}
+function followStep(n) {
+  const list = S.instances.filter(x => visible(x.name)); if (!list.length) return;
+  // prefer instances present in the current frame, in their on-screen order
+  const here = new Set((cache.boxes || []).map(b => b.instance));
+  const ordered = [...list.filter(x => here.has(x.token)), ...list.filter(x => !here.has(x.token))];
+  const i = ordered.findIndex(x => x.token === S.follow);
+  setFollow(ordered[(i + n + ordered.length) % ordered.length].token);
+}
+function jumpToFollowed() {
+  const it = S.follow && S.instances.find(x => x.token === S.follow); if (!it) return;
+  const all = [...new Set([...it.samples_3d, ...it.samples_2d])].sort((a, b) => a - b);
+  const nxt = all.find(k => k > S.i) ?? all[0];
+  if (nxt != null) { S.i = nxt; loadSample(); }
 }
 
 // ------------------------------------------------------------------ navigation
 async function loadScene(tok, i = 0) {
-  const d = await getJSON(`/api/scene/${tok}`);
-  S.scene = tok; S.samples = d.samples; S.timestamps = d.timestamps;
+  const [d, inst] = await Promise.all([getJSON(`/api/scene/${tok}`), getJSON(`/api/scene/${tok}/instances`)]);
+  S.scene = tok; S.samples = d.samples; S.instances = inst;
   S.i = Math.max(0, Math.min(i, S.samples.length - 1));
+  if (S.follow && !inst.some(x => x.token === S.follow)) S.follow = null;
   $('slider').max = S.samples.length - 1; $('scene').value = tok;
-  cache = { token: null, pts: null, colors: null, colorsKey: null };
+  cache = { token: null, pts: null, colors: null, colorsKey: null, boxes: null, radar: null, info: null, b2d: {} };
+  buildFollowList();
   await loadSample();
 }
 function step(n) { S.i = (S.i + n + S.samples.length) % S.samples.length; loadSample(); }
 function stepScene(n) {
   const idx = S.scenes.findIndex(s => s.token === S.scene);
-  const nxt = S.scenes[(idx + n + S.scenes.length) % S.scenes.length];
-  loadScene(nxt.token, 0);
+  loadScene(S.scenes[(idx + n + S.scenes.length) % S.scenes.length].token, 0);
 }
 let playTimer = null;
 function togglePlay(force) {
@@ -240,22 +400,28 @@ function togglePlay(force) {
   if (S.playing) playTimer = setInterval(() => step(1), 200);
 }
 function writeHash() {
-  const sc = S.scenes.find(s => s.token === S.scene);
-  if (!sc) return;
-  history.replaceState(null, '', `#scene=${encodeURIComponent(sc.name)}&i=${S.i}&mode=${S.colorMode}&cmap=${S.cmap}&fusion=${S.modality}`);
+  const sc = S.scenes.find(s => s.token === S.scene); if (!sc) return;
+  const q = new URLSearchParams({ scene: sc.name, i: S.i, mode: S.colorMode, cmap: S.cmap, fusion: S.modality,
+    cams: [...S.cams].join(',') });
+  if (S.hidden.size) q.set('hide', [...S.hidden].join(','));
+  if (S.follow) q.set('follow', S.follow);
+  history.replaceState(null, '', '#' + q.toString());
 }
 function readHash() {
   const h = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
   if (h.mode && S.cfg.color_modes.includes(h.mode)) S.colorMode = h.mode;
   if (h.cmap && S.cfg.colormaps.includes(h.cmap)) S.cmap = h.cmap;
   if (h.fusion && S.cfg.modalities.includes(h.fusion)) S.modality = h.fusion;
+  if (h.cams != null) S.cams = new Set(h.cams.split(',').filter(c => CAMS.includes(c)));
+  if (h.hide) S.hidden = new Set(h.hide.split(',').filter(Boolean));
+  if (h.follow) S.follow = h.follow;
   return h;
 }
 
 // ------------------------------------------------------------------ keys
 const cycle = (list, cur, n) => list[(list.indexOf(cur) + n + list.length) % list.length];
 function onKey(e) {
-  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key, sh = e.shiftKey;
   let handled = true;
   switch (k) {
@@ -266,11 +432,19 @@ function onKey(e) {
     case '.': stepScene(1); break;
     case 'm': S.modality = cycle(S.cfg.modalities, S.modality, 1); toast('fusion: ' + S.modality); loadSample(); break;
     case 'M': S.modality = cycle(S.cfg.modalities, S.modality, -1); toast('fusion: ' + S.modality); loadSample(); break;
+    case '0': S.modality = 'none'; toast('fusion: none'); loadSample(); break;
     case 'i': case 'I': S.colorMode = cycle(S.cfg.color_modes, S.colorMode, sh ? -1 : 1); toast('colour: ' + S.colorMode); loadSample(); break;
     case 'c': case 'C': S.cmap = cycle(S.cfg.colormaps, S.cmap, sh ? -1 : 1); toast('colormap: ' + S.cmap); loadSample(); break;
-    case 'b': case 'B': S.showBoxes = !S.showBoxes; cache.boxes = null; loadSample(); break;
-    case 'r': case 'R': S.showRadar = !S.showRadar; cache.radar = null; loadSample(); break;
-    case 'v': case 'V': S.showCam = !S.showCam; updateCam(); break;
+    case 'b': case 'B': S.showBoxes = !S.showBoxes; rebuildBoxes(); updateHud(); break;
+    case 'r': case 'R': S.showRadar = !S.showRadar; rebuildRadar(); updateHud(); break;
+    case 'v': case 'V': S.camsVisible = !S.camsVisible; loadSample(); break;
+    case 'l': case 'L': S.lidarOverlay = !S.lidarOverlay; toast('LiDAR overlay ' + (S.lidarOverlay ? 'on' : 'off')); updateCams(); break;
+    case 'd': case 'D': S.boxes2d = !S.boxes2d; toast('2D boxes ' + (S.boxes2d ? 'on' : 'off')); updateCams(); break;
+    case 'f': $('filter').classList.toggle('show'); break;
+    case 'F': S.hidden.clear(); applyFilter(); toast('all classes shown'); break;
+    case 'x': followStep(1); break;
+    case 'X': followStep(-1); break;
+    case 'j': case 'J': jumpToFollowed(); break;
     case 'g': case 'G': S.showGrid = !S.showGrid; grid.visible = axes.visible = S.showGrid; break;
     case '+': case '=': S.pointSize = Math.min(12, S.pointSize + 1); ptsMat.size = S.pointSize; updateHud(); break;
     case '-': case '_': S.pointSize = Math.max(1, S.pointSize - 1); ptsMat.size = S.pointSize; updateHud(); break;
@@ -279,22 +453,27 @@ function onKey(e) {
     case 't': case 'T': topView(); break;
     case 'z': case 'Z': case 'Home': resetView(); break;
     case 'h': case 'H': case '?': $('help').classList.toggle('show'); break;
-    case 'Escape': $('help').classList.remove('show'); break;
+    case 'Escape':
+      if ($('help').classList.contains('show')) $('help').classList.remove('show');
+      else if ($('filter').classList.contains('show')) $('filter').classList.remove('show');
+      else if (S.follow) setFollow(null);
+      break;
     default:
-      if (/^[0-6]$/.test(k)) { S.modality = S.cfg.modalities[+k]; toast('fusion: ' + S.modality); loadSample(); }
-      else handled = false;
+      if (/^[1-6]$/.test(k)) {
+        const ch = CAMS[+k - 1];
+        S.cams.has(ch) ? S.cams.delete(ch) : S.cams.add(ch);
+        S.camsVisible = true; toast(`${ch} panel ${S.cams.has(ch) ? 'on' : 'off'}`); loadSample();
+      } else handled = false;
   }
   if (handled) e.preventDefault();
 }
 window.addEventListener('keydown', onKey);
-// Forward keys to the page when the camera panel or a button has focus.
 document.body.tabIndex = -1;
 
 // ------------------------------------------------------------------ boot
 (async () => {
-  S.cfg = await getJSON('/api/config');
-  $('help').textContent = S.cfg.keymap.trim() + '\n\n  fusion colours: pixels of the chosen camera; grey = outside its view';
-  S.scenes = await getJSON('/api/scenes');
+  [S.cfg, S.categories, S.scenes] = await Promise.all([getJSON('/api/config'), getJSON('/api/categories'), getJSON('/api/scenes')]);
+  $('help').textContent = S.cfg.keymap.trim() + '\n\n  fusion colours: pixels of the chosen camera; grey = outside its view\n  camera panels: class colours = 3D box colours; white = followed instance';
   const sel = $('scene');
   for (const s of S.scenes) {
     const o = document.createElement('option'); o.value = s.token;
@@ -302,10 +481,15 @@ document.body.tabIndex = -1;
     sel.appendChild(o);
   }
   sel.addEventListener('change', () => loadScene(sel.value, 0));
+  $('follow').addEventListener('change', () => { setFollow($('follow').value); $('follow').blur(); });
   $('slider').addEventListener('input', () => { S.i = +$('slider').value; loadSample(); });
   $('btnplay').addEventListener('click', () => togglePlay());
   $('btnhelp').addEventListener('click', () => $('help').classList.toggle('show'));
+  $('btnfilter').addEventListener('click', () => $('filter').classList.toggle('show'));
+  $('fall').addEventListener('click', () => { S.hidden.clear(); applyFilter(); });
+  $('fnone').addEventListener('click', () => { S.categories.forEach(c => S.hidden.add(c.name)); applyFilter(); });
   const h = readHash();
+  buildFilter(); resize();
   const start = S.scenes.find(s => s.name === h.scene) || S.scenes[0];
   await loadScene(start.token, +(h.i || 0));
 })();
