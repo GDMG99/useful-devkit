@@ -147,15 +147,17 @@ class SceneBrowser:
         elif modality == 'swir':
             img = SWIRImage(path).image
         elif modality == 'polarimetric':
+            # getMode('RGB') demosaics the 4x4 polarization mosaic to a half-resolution
+            # image whose channels come out RGB-ordered; flip to BGR for cv2/JPEG.
             pol = PolarimetricImage(path).getMode('RGB')
-            img = (pol / (np.max(pol) + 1e-6) * 255).astype(np.uint8)
+            img = (pol / (np.max(pol) + 1e-6) * 255).astype(np.uint8)[:, :, ::-1]
         else:
             return None
         if img is None:
             return None
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        calib_w = float(sd.get('width') or img.shape[1])
+        calib_w = self.calibration_width(sd, img)
         scale = img.shape[1] / calib_w if calib_w else 1.0
         return img, np.asarray(K, dtype=np.float64), np.asarray(T, dtype=np.float64), \
             (np.asarray(dist, dtype=np.float64) if dist is not None and len(dist) else None), scale
@@ -182,6 +184,19 @@ class SceneBrowser:
             scale = scale * f
         return img, K, T, dist, scale
 
+    @staticmethod
+    def calibration_width(sd, img):
+        """Width of the pixel frame the intrinsics and 2D labels are expressed in.
+
+        POLARIMETRIC: sample_data reports the 2448x2048 raw mosaic, but calibration
+        (cx~604, cy~518) and labels (x<=1224, y<=1024) live in the half-resolution
+        demosaiced frame, i.e. the decoded image itself. RGB cameras report 0, so the
+        decoded image size is used there too.
+        """
+        if sd['sensor_modality'] == 'polarimetric':
+            return float(img.shape[1])
+        return float(sd.get('width') or img.shape[1])
+
     def boxes_2d(self, sample_token, channel):
         """2D boxes of one camera image, in the calibrated pixel frame of that image."""
         s = self.db.get('sample', sample_token)
@@ -194,12 +209,13 @@ class SceneBrowser:
             out.append({'token': box.token, 'instance': box.instance_token, 'name': box.name,
                         'label': box.label, 'color': [int(r), int(g), int(b)],
                         'bbox': [float(v) for v in box.bbox], 'visibility': box.visibility})
-        # RGB sample_data records carry width/height = 0; fall back to the decoded image size.
+        # Label frame: see calibration_width (RGB records carry 0; polarimetric labels are half-res).
         w, h = sd.get('width') or 0, sd.get('height') or 0
-        if not w or not h:
-            data = self.image(sample_token, channel)
-            if data is not None:
-                h, w = data[0].shape[:2]
+        data = self.image(sample_token, channel)
+        if data is not None:
+            ih, iw = data[0].shape[:2]
+            if not w or not h or sd['sensor_modality'] == 'polarimetric':
+                w, h = iw, ih
         return {'channel': channel, 'width': int(w), 'height': int(h), 'boxes': out}
 
     @functools.lru_cache(maxsize=16)
